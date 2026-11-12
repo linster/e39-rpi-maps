@@ -120,6 +120,28 @@ Toolkit tests: `PYTHONPATH=toolkit:src toolkit/.venv/bin/python -m unittest
 discover -s toolkit/tests` (needs pyosmium and pyvalhalla: the venv or the
 container's Python).
 
+## Map tiles (HTTP, for the HMI)
+
+`GET /tiles/{z}/{x}/{y}.png`: 256 px raster tiles in OSM's z/x/y scheme
+(zoom 0-19), what the HMI's map draws when its tile source is the maps
+backend. From, in order (`src/tiles/sources.py`; the source is in the
+`X-Tile-Source` response header):
+
+1. **`mbtiles`**: a pre-rendered MBTiles file (`DJANGO_TILES_MBTILES_PATH`,
+   default `e39maps-tiles.mbtiles` beside the map database). None exists
+   yet: the toolkit will render one later.
+2. **`cache`**: the on-device cache (`DJANGO_TILE_CACHE_DIR`; on the device
+   `/var/lib/e39maps/tiles`), tiles fetched earlier, so any tile seen once
+   also works offline.
+3. **`upstream`**: `DJANGO_TILE_UPSTREAM_URL` (tile.openstreetmap.org) on a
+   miss, then cached. Following OSM's tile usage policy: an identifying
+   User-Agent, at most 2 connections, cached tiles kept 7 days and then
+   revalidated (ETag / Last-Modified). **`stale`**: the upstream can't be
+   reached, so an old cached tile is served instead.
+
+404 when a tile isn't available (offline and not cached); empty
+`DJANGO_TILE_UPSTREAM_URL` = offline. `/healthz` reports the tile setup.
+
 ## gRPC API (for the HMI)
 
 The HMI talks to this backend over gRPC for POIs and routes (map tiles will
@@ -176,6 +198,7 @@ src/
 ├── mapdata/        models of the read-only map database (unmanaged)
 ├── pois/           the user's POIs (state database, admin)
 ├── api/            gRPC services + `run_grpc_server` command
+├── tiles/          map tiles over HTTP (MBTiles, cache, upstream)
 ├── e39maps_api/    Python generated from proto/ (scripts/gen-proto.sh)
 ├── requirements/   base.txt (runtime), prod.txt (+ gunicorn),
 │                   dev.txt (+ grpcio-tools)
@@ -220,6 +243,9 @@ important ones:
 | `DJANGO_GRPC_MAX_WORKERS` | `4` | gRPC server threads (concurrent calls). |
 | `DJANGO_ROUTING_TILES_PATH` | `e39maps-routing.tar` beside the map database | Valhalla's routing tiles. |
 | `DJANGO_ROUTING_CACHE_MB` | `64` | Valhalla's cache of decoded tiles. |
+| `DJANGO_TILE_CACHE_DIR` | `output/tile-cache` | Map tile cache (`/tiles/...`). |
+| `DJANGO_TILE_UPSTREAM_URL` | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | Upstream for tile misses; empty = offline. |
+| `DJANGO_TILES_MBTILES_PATH` | `e39maps-tiles.mbtiles` beside the map database | Pre-rendered tiles, if any. |
 
 `DJANGO_DEBUG=0` also enables WhiteNoise's compressed, hashed static storage,
 so run `collectstatic` as part of the build/install step.

@@ -80,6 +80,7 @@ INSTALLED_APPS = [
     "mapdata",
     "pois",
     "api",
+    "tiles",
 ]
 
 MIDDLEWARE = [
@@ -161,6 +162,19 @@ GRPC_MAX_WORKERS = int(os.environ.get("DJANGO_GRPC_MAX_WORKERS", "4"))
 ROUTING_TILES_PATH = Path(os.environ.get(
     "DJANGO_ROUTING_TILES_PATH", MAP_DB_PATH.parent / "e39maps-routing.tar"))
 ROUTING_CACHE_MB = int(os.environ.get("DJANGO_ROUTING_CACHE_MB", "64"))
+
+# Map tiles (tiles/, /tiles/<z>/<x>/<y>.png): a pre-rendered MBTiles file
+# (with the map, later), else the on-device cache, else the upstream server.
+# DJANGO_TILE_UPSTREAM_URL="" = offline (MBTiles and cache only). OSM's tile
+# policy asks for at most 2 connections and caching for at least 7 days.
+TILES_MBTILES_PATH = Path(os.environ.get(
+    "DJANGO_TILES_MBTILES_PATH", MAP_DB_PATH.parent / "e39maps-tiles.mbtiles"))
+TILE_CACHE_DIR = Path(os.environ.get("DJANGO_TILE_CACHE_DIR", BASE_DIR.parent / "output" / "tile-cache"))
+TILE_UPSTREAM_URL = os.environ.get("DJANGO_TILE_UPSTREAM_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
+TILE_UPSTREAM_CONNECTIONS = int(os.environ.get("DJANGO_TILE_UPSTREAM_CONNECTIONS", "2"))
+TILE_UPSTREAM_TIMEOUT = float(os.environ.get("DJANGO_TILE_UPSTREAM_TIMEOUT", "10"))
+TILE_CACHE_MAX_AGE = int(os.environ.get("DJANGO_TILE_CACHE_MAX_AGE", str(7 * 24 * 3600)))
+TILE_CLIENT_MAX_AGE = 24 * 3600
 
 
 # --- Logging ----------------------------------------------------------------

@@ -18,4 +18,10 @@ def healthz(request):
         map_db = {"available": True, "meta": MapMeta.as_dict()}
     except DatabaseError as exc:
         map_db = {"available": False, "error": str(exc)}
-    return JsonResponse({"status": "ok", "map_db": map_db})
+    from django.conf import settings
+
+    from tiles.sources import mbtiles_info
+
+    tiles = {"mbtiles": mbtiles_info(), "upstream": settings.TILE_UPSTREAM_URL or None,
+             "cache_dir": str(settings.TILE_CACHE_DIR)}
+    return JsonResponse({"status": "ok", "map_db": map_db, "tiles": tiles})

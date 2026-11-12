@@ -230,3 +230,6 @@ toolkit/.venv/
 output/db/*
 !output/db/README.md
 !output/db/ATTRIBUTION.txt
+
+# The tile cache of a laptop backend (DJANGO_TILE_CACHE_DIR default).
+output/tile-cache/

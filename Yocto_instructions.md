@@ -49,6 +49,8 @@ Environment on the device (`/etc/default/e39maps`):
 | `DJANGO_GRPC_BIND` | `0.0.0.0:50051` (default) |
 | `DJANGO_ROUTING_TILES_PATH` | `/usr/share/e39rpi-maps/data/e39maps-routing.tar` |
 | `DJANGO_ROUTING_CACHE_MB` | `64` |
+| `DJANGO_TILE_CACHE_DIR` | `/var/lib/e39maps/tiles` (writable; grows with the tiles viewed) |
+| `DJANGO_TILE_UPSTREAM_URL` | default (tile.openstreetmap.org; needs HTTPS: ca-certificates) |
 
 ## How it runs
 

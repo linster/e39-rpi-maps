@@ -24,10 +24,10 @@ class IndexViewTests(TestCase):
         response = self.client.get(reverse("core:healthz"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {
-            "status": "ok",
-            "map_db": {"available": True, "meta": {"built_at": "2026-11-12T00:00:00Z"}},
-        })
+        body = response.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["map_db"], {"available": True, "meta": {"built_at": "2026-11-12T00:00:00Z"}})
+        self.assertIn("upstream", body["tiles"])
 
 
 class StateDatabasePragmaTests(TestCase):
