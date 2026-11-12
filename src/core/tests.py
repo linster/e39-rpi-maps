@@ -46,3 +46,39 @@ class StateDatabasePragmaTests(TestCase):
 
     def test_map_database_is_left_alone(self):
         self.assertEqual(self.pragma("mapdata", "synchronous"), 2)   # FULL, the default
+
+
+class DevAdminTests(TestCase):
+    """core.dev_admin: the development admin account after migrate."""
+
+    def setUp(self):
+        # Creating the test database ran migrate, which (DEBUG defaults on)
+        # already created admin. Start each test without users.
+        from django.contrib.auth.models import User
+        User.objects.all().delete()
+
+    def run_handler(self):
+        from core.dev_admin import ensure_dev_admin
+        ensure_dev_admin(sender=None, using="default")
+
+    def test_creates_the_admin(self):
+        from django.contrib.auth.models import User
+        with self.settings(DEV_ADMIN="admin:e39rpi"):
+            self.run_handler()
+        user = User.objects.get(username="admin")
+        self.assertTrue(user.is_superuser and user.is_staff)
+        self.assertTrue(user.check_password("e39rpi"))
+
+    def test_never_overwrites_an_existing_user(self):
+        from django.contrib.auth.models import User
+        User.objects.create_user("admin", password="changed")
+        with self.settings(DEV_ADMIN="admin:e39rpi"):
+            self.run_handler()
+        self.assertTrue(User.objects.get(username="admin").check_password("changed"))
+
+    def test_off_when_empty_or_malformed(self):
+        from django.contrib.auth.models import User
+        for value in ("", "adminonly", ":nopassword"):
+            with self.settings(DEV_ADMIN=value):
+                self.run_handler()
+        self.assertFalse(User.objects.exists())

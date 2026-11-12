@@ -46,6 +46,11 @@ if not SECRET_KEY:
         raise ImproperlyConfigured("DJANGO_SECRET_KEY must be set when DJANGO_DEBUG=0")
 
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]")
+
+# A development admin account "user:password", created after migrate if it
+# doesn't exist yet (core/dev_admin.py). Development defaults to
+# admin:e39rpi; production gets none unless set; "" turns it off.
+DEV_ADMIN = os.environ.get("DJANGO_DEV_ADMIN", "admin:e39rpi" if DEBUG else "")
 CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
 
 # Trust X-Forwarded-Proto when running behind a reverse proxy.

@@ -26,8 +26,12 @@ python manage.py runserver
 
 - Page: <http://127.0.0.1:8000/>
 - Health probe: <http://127.0.0.1:8000/healthz>
-- Admin: <http://127.0.0.1:8000/admin/> (create a user with
-  `python manage.py createsuperuser`)
+- Admin: <http://127.0.0.1:8000/admin/>, user **`admin`**, password
+  **`e39rpi`**: in development (`DJANGO_DEBUG=1`, the default) `migrate`
+  creates that account if it's missing (`DJANGO_DEV_ADMIN`, see
+  `.env.example`; never overwritten, so a changed password stays). Production
+  gets none unless `DJANGO_DEV_ADMIN` is set; the Yocto image sets it for
+  development images (`debug-tweaks`) only.
 
 Run the tests with:
 
@@ -74,6 +78,7 @@ important ones:
 | `DJANGO_MAP_DB_PATH` | `output/db/e39maps-osm.sqlite` | Read-only map database, opened in place. |
 | `DJANGO_STATIC_ROOT` | `src/staticfiles` | Writable location for `collectstatic`. |
 | `DJANGO_HTTPS` | `0` | Set to `1` to enable HSTS and secure cookies. |
+| `DJANGO_DEV_ADMIN` | `admin:e39rpi` with `DEBUG`, else unset | `user:password` of a superuser `migrate` creates if missing; empty = none. |
 
 `DJANGO_DEBUG=0` also enables WhiteNoise's compressed, hashed static storage,
 so run `collectstatic` as part of the build/install step.
