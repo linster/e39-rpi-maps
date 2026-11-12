@@ -82,6 +82,9 @@ and each one costs tens of MB of RSS. Tune only after measuring on the target.
 
 ## Packaging plan for the Raspberry Pi / Yocto
 
+> The concrete recipe contract (SRCREV, unit files, dependency names,
+> acceptance checks) lives in [`Yocto_instructions.md`](Yocto_instructions.md).
+
 The guiding constraint is that the Pi has little RAM (512 MB–2 GB), slow
 storage (SD card), and limited CPU. Everything below is chosen to avoid
 running heavy services and to avoid doing expensive work on the device.
