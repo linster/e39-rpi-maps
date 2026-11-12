@@ -1,0 +1,23 @@
+{% load static %}<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>e39-rpi-maps</title>
+    <link rel="stylesheet" href="{% static 'core/site.css' %}">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">e39-rpi-maps</p>
+      <h1>Hello from Django</h1>
+      <p class="lede">
+        The backend is up and serving a page. GeoDjango, OpenStreetMap data,
+        the admin and gRPC streaming come next.
+      </p>
+      <dl>
+        <div><dt>Django</dt><dd>{{ django_version }}</dd></div>
+        <div><dt>Health</dt><dd><a href="{% url 'core:healthz' %}">/healthz</a></dd></div>
+      </dl>
+    </main>
+  </body>
+</html>
