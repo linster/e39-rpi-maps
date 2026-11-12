@@ -121,7 +121,7 @@ class Route(_message.Message):
     def __init__(self, shape: _Optional[_Iterable[_Union[_common_pb2.LatLng, _Mapping]]] = ..., length_meters: _Optional[float] = ..., duration_seconds: _Optional[float] = ..., maneuvers: _Optional[_Iterable[_Union[Maneuver, _Mapping]]] = ...) -> None: ...
 
 class Maneuver(_message.Message):
-    __slots__ = ("type", "instruction", "verbal_pre_transition", "street_names", "length_meters", "duration_seconds", "begin_shape_index", "end_shape_index", "roundabout_exit_count")
+    __slots__ = ("type", "instruction", "verbal_pre_transition", "street_names", "length_meters", "duration_seconds", "begin_shape_index", "end_shape_index", "roundabout_exit_count", "location", "trigger_radius_meters")
     TYPE_FIELD_NUMBER: _ClassVar[int]
     INSTRUCTION_FIELD_NUMBER: _ClassVar[int]
     VERBAL_PRE_TRANSITION_FIELD_NUMBER: _ClassVar[int]
@@ -131,6 +131,8 @@ class Maneuver(_message.Message):
     BEGIN_SHAPE_INDEX_FIELD_NUMBER: _ClassVar[int]
     END_SHAPE_INDEX_FIELD_NUMBER: _ClassVar[int]
     ROUNDABOUT_EXIT_COUNT_FIELD_NUMBER: _ClassVar[int]
+    LOCATION_FIELD_NUMBER: _ClassVar[int]
+    TRIGGER_RADIUS_METERS_FIELD_NUMBER: _ClassVar[int]
     type: ManeuverType
     instruction: str
     verbal_pre_transition: str
@@ -140,4 +142,6 @@ class Maneuver(_message.Message):
     begin_shape_index: int
     end_shape_index: int
     roundabout_exit_count: int
-    def __init__(self, type: _Optional[_Union[ManeuverType, str]] = ..., instruction: _Optional[str] = ..., verbal_pre_transition: _Optional[str] = ..., street_names: _Optional[_Iterable[str]] = ..., length_meters: _Optional[float] = ..., duration_seconds: _Optional[float] = ..., begin_shape_index: _Optional[int] = ..., end_shape_index: _Optional[int] = ..., roundabout_exit_count: _Optional[int] = ...) -> None: ...
+    location: _common_pb2.LatLng
+    trigger_radius_meters: float
+    def __init__(self, type: _Optional[_Union[ManeuverType, str]] = ..., instruction: _Optional[str] = ..., verbal_pre_transition: _Optional[str] = ..., street_names: _Optional[_Iterable[str]] = ..., length_meters: _Optional[float] = ..., duration_seconds: _Optional[float] = ..., begin_shape_index: _Optional[int] = ..., end_shape_index: _Optional[int] = ..., roundabout_exit_count: _Optional[int] = ..., location: _Optional[_Union[_common_pb2.LatLng, _Mapping]] = ..., trigger_radius_meters: _Optional[float] = ...) -> None: ...

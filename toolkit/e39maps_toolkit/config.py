@@ -45,6 +45,7 @@ def _default_yocto():
 class Settings:
     region: Region = field(default_factory=lambda: Region(**asdict(DEFAULT_REGION)))
     categories: list = field(default_factory=lambda: list(schema.CATEGORIES))
+    routing: bool = True               # build routing tiles (Valhalla) with the map
     cache_dir: str = field(default_factory=lambda: str(default_cache_dir()))
     output: str = str(REPO / "output" / "db" / "e39maps-osm.sqlite")
     target: str = QEMU_TARGET          # "localhost:2222" (QEMU) or host[:port]
@@ -72,6 +73,11 @@ class Settings:
         path = _settings_file()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(asdict(self), indent=2) + "\n")
+
+
+def routing_cache_dir(cache_dir):
+    """Routing tiles cache, next to the extract cache."""
+    return Path(cache_dir).parent / "routing"
 
 
 def toolkit_version():

@@ -14,6 +14,8 @@ table in it. Bump SCHEMA_VERSION on incompatible changes; the backend
 reads only the version(s) it knows.
 """
 
+import hashlib
+import os
 import sqlite3
 
 APPLICATION_ID = 0x45333950  # "E39P"
@@ -35,6 +37,60 @@ CATEGORIES = {
 
 # Facts in e39maps_meta. Required ones must be present for a valid file.
 REQUIRED_META = ("schema_version", "built_at", "poi_count")
+
+# Routing tiles (Valhalla) travel with the map database as a second file,
+# built from the same extracts: one map version. The database names them in
+# its facts, so a pair can be checked before it's installed:
+#   routing_file      file name beside the database (toolkit output, USB)
+#   routing_size      bytes
+#   routing_sha256    hex digest
+#   valhalla_version  the Valhalla that built them (the device's must match)
+# Without these facts the map has no routing tiles. On the device the tiles
+# are always installed under this name, next to the database:
+ROUTING_DEVICE_NAME = "e39maps-routing.tar"
+ROUTING_META = ("routing_file", "routing_size", "routing_sha256", "valhalla_version")
+
+
+def routing_name_for(db_name):
+    """The routing file's name beside a database: e39maps-osm.sqlite ->
+    e39maps-osm.routing.tar."""
+    stem = db_name.rsplit(".", 1)[0] if "." in db_name else db_name
+    return f"{stem}.routing.tar"
+
+
+def routing_info(meta):
+    """The routing facts of a map database, or None if it has none."""
+    if not all(k in meta for k in ROUTING_META):
+        return None
+    return {k: meta[k] for k in ROUTING_META}
+
+
+def sha256_file(path, progress=None):
+    h = hashlib.sha256()
+    size, done = os.path.getsize(path), 0
+    with open(path, "rb") as f:
+        while chunk := f.read(8 << 20):
+            h.update(chunk)
+            done += len(chunk)
+            if progress:
+                progress(done, size)
+    return h.hexdigest()
+
+
+def check_routing(meta, tiles_path, verify_hash=True):
+    """Raise InvalidMapDatabase unless tiles_path is the routing tiles the
+    map database (meta) was built with."""
+    info = routing_info(meta)
+    if info is None:
+        raise InvalidMapDatabase("this map database has no routing tiles")
+    if not os.path.isfile(tiles_path):
+        raise InvalidMapDatabase(f"routing tiles missing: {tiles_path}")
+    size = os.path.getsize(tiles_path)
+    if size != int(info["routing_size"]):
+        raise InvalidMapDatabase(
+            f"{tiles_path} doesn't belong to this map database ({size} bytes, expected {info['routing_size']})")
+    if verify_hash and sha256_file(tiles_path) != info["routing_sha256"]:
+        raise InvalidMapDatabase(f"{tiles_path} is damaged or doesn't belong to this map database (SHA-256)")
 
 SCHEMA = """
 CREATE TABLE e39maps_meta (

@@ -20,6 +20,7 @@ from mapdata import schema
 
 DATA_DIR = "/usr/share/e39rpi-maps/data"
 INCOMING = f"{DATA_DIR}/.incoming-e39maps-osm.sqlite"
+INCOMING_ROUTING = f"{DATA_DIR}/.incoming-{schema.ROUTING_DEVICE_NAME}"
 INSTALLER = "/usr/libexec/e39maps-mapdb"
 DB_NAME = "e39maps-osm.sqlite"
 
@@ -63,9 +64,20 @@ def _run(cmd, log, timeout):
     return code, lines
 
 
+def paired_files(db_path, log=print):
+    """(meta, routing tiles path or None), checked to belong together."""
+    meta = schema.check(db_path)
+    if schema.routing_info(meta) is None:
+        return meta, None
+    tiles = Path(db_path).with_name(meta["routing_file"])
+    log(f"Checking the routing tiles {tiles.name}...")
+    schema.check_routing(meta, tiles)
+    return meta, tiles
+
+
 def live_swap(db_path, target, user="root", password="", log=print):
     db_path = Path(db_path)
-    meta = schema.check(db_path)
+    meta, tiles = paired_files(db_path, log)
     host, port = parse_target(target)
     ssh = _ssh_base("ssh", host, port, user, password) + [f"{user}@{host}"]
     log(f"Map database {db_path.name}: built {meta['built_at']}, {meta['poi_count']} POIs, "
@@ -78,16 +90,19 @@ def live_swap(db_path, target, user="root", password="", log=print):
         raise PushError(f"{host} has no {INSTALLER}: its image is older than the map toolkit; "
                         "update the image first")
 
-    log(f"Copying to {host}:{INCOMING}...")
-    started = time.monotonic()
-    scp = _ssh_base("scp", host, port, user, password) + ["-q", str(db_path), f"{user}@{host}:{INCOMING}"]
-    code, _ = _run(scp, log, 3600)
-    if code != 0:
-        raise PushError("copying the map database failed")
-    log(f"  copied in {time.monotonic() - started:.0f} s")
+    copies = [(db_path, INCOMING)] + ([(tiles, INCOMING_ROUTING)] if tiles else [])
+    for src, dest in copies:
+        log(f"Copying {src.name} ({src.stat().st_size / 1e6:.0f} MB) to {host}:{dest}...")
+        started = time.monotonic()
+        scp = _ssh_base("scp", host, port, user, password) + ["-q", str(src), f"{user}@{host}:{dest}"]
+        code, _ = _run(scp, log, 3600)
+        if code != 0:
+            raise PushError(f"copying {src.name} failed")
+        log(f"  copied in {time.monotonic() - started:.0f} s")
 
-    log("Installing (stop services, swap, start)...")
-    code, _ = _run(ssh + [f"{INSTALLER} install --move {INCOMING}"], log, 600)
+    log("Installing (check, stop services, swap, start)...")
+    routing_arg = f" --routing {INCOMING_ROUTING}" if tiles else ""
+    code, _ = _run(ssh + [f"{INSTALLER} install --move{routing_arg} {INCOMING}"], log, 900)
     if code != 0:
         raise PushError(f"the installer on {host} failed (exit {code}); the old map database stays")
     log(f"Done: {host} uses the map database built {meta['built_at']}.")
@@ -108,17 +123,23 @@ def yocto_data_dir(yocto_dir):
 
 def update_image(db_path, yocto_dir, machine, build=True, log=print):
     db_path = Path(db_path)
-    meta = schema.check(db_path)
+    meta, tiles = paired_files(db_path, log)
     yocto_dir = Path(yocto_dir)
     if not (yocto_dir / "scripts" / "build.sh").exists():
         raise PushError(f"{yocto_dir} isn't an e39-rpi-yocto checkout (no scripts/build.sh)")
     data_dir = yocto_data_dir(yocto_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    dest = data_dir / DB_NAME
-    tmp = data_dir / f".{DB_NAME}.copying"
-    shutil.copyfile(db_path, tmp)
-    tmp.replace(dest)
-    log(f"Installed into the image build: {dest} (built {meta['built_at']}, {meta['poi_count']} POIs)")
+    # Routing tiles first (under the name the database records), then the
+    # database; tiles of an older map are removed.
+    for old in data_dir.glob("*.routing.tar"):
+        if tiles is None or old.name != tiles.name:
+            old.unlink()
+    for src, name in ([(tiles, tiles.name)] if tiles else []) + [(db_path, DB_NAME)]:
+        tmp = data_dir / f".{name}.copying"
+        shutil.copyfile(src, tmp)
+        tmp.replace(data_dir / name)
+    log(f"Installed into the image build: {data_dir} (built {meta['built_at']}, {meta['poi_count']} POIs, "
+        + (f"routing tiles {tiles.name})" if tiles else "no routing tiles)"))
     if not build:
         return None
     log(f"Starting the image build for {machine} (progress window)...")

@@ -66,6 +66,14 @@ toolkit/map-toolkit.sh --help   # the same as commands: build, info, push, updat
   junkyards (OSM tags: `toolkit/e39maps_toolkit/categories.py`). Named
   objects only, except fuel stations and car parts stores (brand/operator
   instead).
+- **Routing tiles** (on by default): Valhalla's car-only road network for
+  the extracts (all of Ontario and Quebec: ~625 MB, ~5 minutes, ~13 GB of
+  RAM), built with pyvalhalla's `valhalla_build_tiles` and cached (rebuilt
+  only when the extracts or the Valhalla version change). They're written
+  beside the database as `e39maps-osm.routing.tar`, and the database
+  records their size, SHA-256 and Valhalla version: the two files are one
+  map version and always travel together (push, USB, image), checked
+  before they're installed.
 - **Live swap** (QEMU on `localhost:2222`, or a device's host/IP): copies
   the database over ssh next to the installed one, then the device's
   installer (`e39maps-mapdb`, Yocto layer) checks it, stops the services
@@ -76,10 +84,11 @@ toolkit/map-toolkit.sh --help   # the same as commands: build, info, push, updat
   `E39_MAPS_DATA_DIR` from its `local.conf`) and starts the image build
   (qemuarm64 or raspberrypi4-64) with its progress window, so `run-qemu.sh`
   and the SD card tools use an image with this map.
-- **USB stick** (no laptop needed): put the database in a folder `RPIMAPS`
-  on a stick and plug it into the device; it's checked and installed, then
-  renamed on the stick to `<name>.copied-<date-time>` (invalid files:
-  `.rejected-...`; older ones next to a newer: `.skipped-...`).
+- **USB stick** (no laptop needed): put the database and its routing
+  tiles in a folder `RPIMAPS` on a stick and plug it into the device;
+  they're checked and installed, then renamed on the stick to
+  `<name>.copied-<date-time>` (invalid files: `.rejected-...`; older ones
+  next to a newer: `.skipped-...`).
 
 The file format is `src/mapdata/schema.py`, shared by the toolkit, the
 backend and the device's installer: SQLite with `application_id` "E39P" and
@@ -98,7 +107,7 @@ from a copy (`java_package ca.stefanm.e39maps.v1`).
 | Service | RPCs | State |
 | --- | --- | --- |
 | `e39maps.v1.PoiService` | `ListPois`, `GetPoi`, `CreatePoi`, `UpdatePoi` (with a `FieldMask`), `DeletePoi`, `SearchPois` (near a point with a radius, nearest first, or in a bounding box; by name; by category; visible only; limit 50, max 500) | the user's POIs (`pois` app, state database; also editable in the Django admin); `SearchPois` with `sources: MAP` also finds POIs from the map database (category, OSM details) |
-| `e39maps.v1.RouteService` | `ComputeRoute` (origin, destination, via points → shape, length, duration, maneuvers in Valhalla's terms) | answers `UNIMPLEMENTED` until Valhalla is in |
+| `e39maps.v1.RouteService` | `ComputeRoute` (origin, destination, via points as stops, km/miles, instruction language → shape, length, duration, maneuvers with Valhalla's types, instructions and street names) | Valhalla in-process (`api/routing.py`), car costing, the map's routing tiles; `UNAVAILABLE` without them, `NOT_FOUND` when no road connects the points |
 
 Errors are gRPC status codes: `NOT_FOUND` (no POI with that id),
 `INVALID_ARGUMENT` (no name or location, coordinates out of range, a field
@@ -178,6 +187,8 @@ important ones:
 | `DJANGO_DEV_ADMIN` | `admin:e39rpi` with `DEBUG`, else unset | `user:password` of a superuser `migrate` creates if missing; empty = none. |
 | `DJANGO_GRPC_BIND` | `0.0.0.0:50051` | Where `run_grpc_server` listens. |
 | `DJANGO_GRPC_MAX_WORKERS` | `4` | gRPC server threads (concurrent calls). |
+| `DJANGO_ROUTING_TILES_PATH` | `e39maps-routing.tar` beside the map database | Valhalla's routing tiles. |
+| `DJANGO_ROUTING_CACHE_MB` | `64` | Valhalla's cache of decoded tiles. |
 
 `DJANGO_DEBUG=0` also enables WhiteNoise's compressed, hashed static storage,
 so run `collectstatic` as part of the build/install step.
@@ -382,5 +393,5 @@ it's not the default.
 1. Hello world page and health endpoint. ✅
 2. Add GeoDjango + SpatiaLite, a `places` model, admin registration.
 3. Import a regional OSM extract on the build host.
-4. gRPC service: user POIs (CRUD, search) ✅; routes after Valhalla.
+4. gRPC service: user POIs (CRUD, search) ✅; map POIs ✅; routes (Valhalla) ✅.
 5. Test the BitBake recipe + systemd units on the Pi.

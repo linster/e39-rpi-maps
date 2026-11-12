@@ -5,6 +5,10 @@ threads with their own database connections, so these are
 TransactionTestCases (a TestCase's transaction isn't visible to them).
 """
 
+import json
+import unittest
+from pathlib import Path
+
 import grpc
 from django.test import TransactionTestCase, override_settings
 from google.protobuf.field_mask_pb2 import FieldMask
@@ -167,10 +171,161 @@ class PoiSearchTests(GrpcTestCase):
 
 class RouteTests(GrpcTestCase):
 
-    def test_compute_route_is_unimplemented_until_valhalla(self):
-        err = self.assertStatus(grpc.StatusCode.UNIMPLEMENTED, self.routes.ComputeRoute,
-                                routes_pb2.ComputeRouteRequest(origin=latlng(45, -75), destination=latlng(46, -75)))
-        self.assertIn("Valhalla", err.details())
+    def test_unavailable_without_routing_tiles(self):
+        from . import routing
+
+        routing._router = None
+        with self.settings(ROUTING_TILES_PATH="/nonexistent/e39maps-routing.tar"):
+            err = self.assertStatus(grpc.StatusCode.UNAVAILABLE, self.routes.ComputeRoute,
+                                    routes_pb2.ComputeRouteRequest(origin=latlng(45, -75), destination=latlng(46, -75)))
+        routing._router = None
+        self.assertIn("no routing tiles", err.details())
+
+    def test_trigger_radius(self):
+        from .routing import trigger_radius
+
+        self.assertAlmostEqual(trigger_radius(2000, 72), 2000 / 72 * 15)      # 100 km/h: ~417 m
+        self.assertAlmostEqual(trigger_radius(50000, 1500), 500.0)                  # 120 km/h: 500 m
+        self.assertAlmostEqual(trigger_radius(90000, 2000), 675.0)
+        self.assertAlmostEqual(trigger_radius(200000, 2000), 1000.0)                # capped
+        self.assertAlmostEqual(trigger_radius(400, 60), 100.0)                      # 24 km/h: 100 m
+        self.assertAlmostEqual(trigger_radius(300, 100), 45.0)                      # slow: 45 m
+        self.assertAlmostEqual(trigger_radius(100, 60), 30.0)                       # minimum 30 m
+        self.assertAlmostEqual(trigger_radius(20, 2), 20.0)                         # not past the previous turn
+        self.assertAlmostEqual(trigger_radius(5, 1), 15.0)                          # ...but at least 15 m
+        self.assertAlmostEqual(trigger_radius(0, 0), 30.0)
+
+    def test_decode_polyline6(self):
+        from .routing import decode_polyline6
+
+        # Valhalla's example: Google's "_p~iF~ps|U_ulLnnqC_mqNvxq`@" at 1e5
+        # is (38.5, -120.2), (40.7, -120.95), (43.252, -126.453); at 1e6
+        # the same text means a tenth of that.
+        self.assertEqual(decode_polyline6("_p~iF~ps|U_ulLnnqC_mqNvxq`@"),
+                         [(3.85, -12.02), (4.07, -12.095), (4.3252, -12.6453)])
+
+
+def _valhalla_bin():
+    try:
+        import valhalla
+    except ImportError:
+        return None
+    path = Path(valhalla.__file__).parent / "bin" / "valhalla_build_tiles"
+    return path if path.exists() else None
+
+
+# A small grid of residential streets west of Parliament Hill (~0.004 deg
+# apart, ~300 m), "Main Street" east-west, "First Avenue" north-south, plus
+# an isolated street far away (unreachable).
+GRID_OSM = """<?xml version='1.0' encoding='UTF-8'?>
+<osm version="0.6" generator="test">
+  <node id="1" lat="45.420" lon="-75.710" version="1"/>
+  <node id="2" lat="45.420" lon="-75.706" version="1"/>
+  <node id="3" lat="45.420" lon="-75.702" version="1"/>
+  <node id="4" lat="45.424" lon="-75.706" version="1"/>
+  <node id="5" lat="45.416" lon="-75.706" version="1"/>
+  <node id="6" lat="45.424" lon="-75.702" version="1"/>
+  <node id="20" lat="45.500" lon="-75.500" version="1"/>
+  <node id="21" lat="45.501" lon="-75.500" version="1"/>
+  <way id="10" version="1"><nd ref="1"/><nd ref="2"/><nd ref="3"/><tag k="highway" v="residential"/><tag k="name" v="Main Street"/></way>
+  <way id="11" version="1"><nd ref="5"/><nd ref="2"/><nd ref="4"/><tag k="highway" v="residential"/><tag k="name" v="First Avenue"/></way>
+  <way id="12" version="1"><nd ref="4"/><nd ref="6"/><nd ref="3"/><tag k="highway" v="residential"/><tag k="name" v="Second Street"/></way>
+  <way id="13" version="1"><nd ref="20"/><nd ref="21"/><tag k="highway" v="residential"/><tag k="name" v="Island Road"/></way>
+</osm>
+"""
+
+
+@unittest.skipIf(_valhalla_bin() is None, "pyvalhalla (with valhalla_build_tiles) isn't installed")
+class ValhallaRouteTests(GrpcTestCase):
+    """ComputeRoute with real Valhalla tiles, built from GRID_OSM."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import subprocess
+        import tempfile
+
+        import osmium
+        import valhalla
+
+        cls.tmp = Path(tempfile.mkdtemp())
+        xml = cls.tmp / "grid.osm"
+        xml.write_text(GRID_OSM)
+        pbf = cls.tmp / "grid.osm.pbf"
+        with osmium.SimpleWriter(str(pbf)) as writer:
+            for obj in osmium.FileProcessor(str(xml)):
+                writer.add(obj)
+        config = valhalla.get_config(tile_extract="", tile_dir="")
+        config["mjolnir"].update(tile_dir=str(cls.tmp / "tiles"), tile_extract=str(cls.tmp / "tiles.tar"),
+                                 admin="", timezone="", concurrency=1)
+        conf = cls.tmp / "valhalla.json"
+        conf.write_text(json.dumps(config))
+        subprocess.run([str(_valhalla_bin()), "-c", str(conf), str(pbf)], check=True, capture_output=True)
+        import sys
+        subprocess.run([sys.executable, "-m", "valhalla.valhalla_build_extract", "-c", str(conf)],
+                       check=True, capture_output=True)
+        cls.tiles = cls.tmp / "tiles.tar"
+
+    def setUp(self):
+        super().setUp()
+        from . import routing
+
+        routing._router = None
+        self.override = self.settings(ROUTING_TILES_PATH=str(self.tiles))
+        self.override.enable()
+
+    def tearDown(self):
+        from . import routing
+
+        self.override.disable()
+        routing._router = None
+        super().tearDown()
+
+    def route(self, *points, **kwargs):
+        origin, *via, destination = [latlng(*p) for p in points]
+        return self.routes.ComputeRoute(routes_pb2.ComputeRouteRequest(
+            origin=origin, via=via, destination=destination, **kwargs))
+
+    def test_route_with_turn_instructions(self):
+        # West end of Main Street -> north end of First Avenue: east, then left.
+        route = self.route((45.420, -75.710), (45.424, -75.706))
+        self.assertGreater(len(route.shape), 2)
+        self.assertAlmostEqual(route.shape[0].latitude, 45.420, places=3)
+        self.assertAlmostEqual(route.shape[-1].latitude, 45.424, places=3)
+        self.assertTrue(600 < route.length_meters < 900, route.length_meters)
+        self.assertGreater(route.duration_seconds, 0)
+        types = [m.type for m in route.maneuvers]
+        self.assertEqual(types[0], routes_pb2.MANEUVER_TYPE_START)
+        self.assertIn(routes_pb2.MANEUVER_TYPE_LEFT, types)
+        self.assertEqual(types[-1], routes_pb2.MANEUVER_TYPE_DESTINATION)
+        left = route.maneuvers[types.index(routes_pb2.MANEUVER_TYPE_LEFT)]
+        self.assertIn("First Avenue", left.street_names)
+        self.assertIn("left", left.instruction.lower())
+        self.assertEqual(route.maneuvers[-1].end_shape_index, len(route.shape) - 1)
+        # Each maneuver has its point and a trigger radius within the bounds.
+        for m in route.maneuvers:
+            self.assertEqual(m.location, route.shape[m.begin_shape_index])
+            self.assertTrue(15 <= m.trigger_radius_meters <= 1000, m.trigger_radius_meters)
+        self.assertAlmostEqual(left.location.latitude, 45.420, places=3)
+        self.assertAlmostEqual(left.location.longitude, -75.706, places=3)
+
+    def test_via_point_joins_legs(self):
+        direct = self.route((45.420, -75.710), (45.420, -75.702))
+        via = self.route((45.420, -75.710), (45.424, -75.706), (45.420, -75.702))
+        self.assertGreater(via.length_meters, direct.length_meters)
+        indexes = [i for m in via.maneuvers for i in (m.begin_shape_index, m.end_shape_index)]
+        self.assertEqual(max(indexes), len(via.shape) - 1)
+        self.assertEqual(indexes, sorted(indexes))
+
+    def test_miles_and_french(self):
+        km = self.route((45.420, -75.710), (45.424, -75.706))
+        mi = self.route((45.420, -75.710), (45.424, -75.706), units=routes_pb2.UNITS_MILES, language="fr-FR")
+        self.assertAlmostEqual(km.length_meters, mi.length_meters, delta=5)
+        self.assertIn("gauche", " ".join(m.instruction for m in mi.maneuvers).lower())
+
+    def test_no_route_and_bad_input(self):
+        self.assertStatus(grpc.StatusCode.NOT_FOUND, self.route, (45.420, -75.710), (45.5005, -75.500))
+        self.assertStatus(grpc.StatusCode.INVALID_ARGUMENT, self.route, (95, 0), (45.42, -75.70))
 
 
 class MapPoiSearchTests(GrpcTestCase):

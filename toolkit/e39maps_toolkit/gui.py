@@ -86,10 +86,13 @@ class ToolkitWindow:
         self.cache_dir = self._entry(f, 0, "Extract cache", self.settings.cache_dir, 50)
         self.output = self._entry(f, 1, "Database file", self.settings.output, 50)
         ttk.Button(f, text="...", width=3, command=self.choose_output).grid(row=1, column=2, **PAD)
+        self.routing = tk.BooleanVar(value=self.settings.routing)
+        ttk.Checkbutton(f, text="Routing tiles (Valhalla, car; cached, rebuilt when the extracts change)",
+                        variable=self.routing).grid(row=2, column=0, columnspan=3, sticky="w", **PAD)
         self.db_info = ttk.Label(f, text="", foreground="#333")
-        self.db_info.grid(row=2, column=0, columnspan=3, sticky="w", **PAD)
+        self.db_info.grid(row=4, column=0, columnspan=3, sticky="w", **PAD)
         row = ttk.Frame(f)
-        row.grid(row=3, column=0, columnspan=3, sticky="ew", **PAD)
+        row.grid(row=5, column=0, columnspan=3, sticky="ew", **PAD)
         row.columnconfigure(2, weight=1)
         self.build_button = ttk.Button(row, text="Build map database", command=self.start_build)
         self.build_button.grid(row=0, column=0, **PAD)
@@ -152,6 +155,7 @@ class ToolkitWindow:
             raise ValueError("Centre and radius must be numbers.")
         s.region.extracts = [e.strip() for e in self.extracts.get().split(",") if e.strip()]
         s.categories = [k for k, v in self.category_vars.items() if v.get()]
+        s.routing = self.routing.get()
         s.cache_dir = self.cache_dir.get().strip()
         s.output = self.output.get().strip()
         s.device_host = self.device_host.get().strip()
@@ -176,8 +180,11 @@ class ToolkitWindow:
             return
         try:
             meta = schema.check(path, quick_check=False)
+            routing = schema.routing_info(meta)
+            tiles = (f"routing tiles {int(routing['routing_size']) / 1e6:.0f} MB (Valhalla {routing['valhalla_version']})"
+                     if routing else "no routing tiles")
             self.db_info.configure(text=f"Built {meta['built_at']}: {meta['poi_count']} POIs, "
-                                        f"{path.stat().st_size / 1e6:.1f} MB ({meta.get('region', '')})")
+                                        f"{path.stat().st_size / 1e6:.1f} MB, {tiles}")
         except schema.InvalidMapDatabase as exc:
             self.db_info.configure(text=f"Not a map database from this toolkit: {exc}")
 

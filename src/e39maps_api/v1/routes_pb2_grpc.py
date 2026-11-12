@@ -26,8 +26,10 @@ class RouteServiceServicer(object):
 
     def ComputeRoute(self, request, context):
         """INVALID_ARGUMENT for missing/out-of-range points; NOT_FOUND if no route
-        connects them (e.g. outside the map data); UNIMPLEMENTED until routing
-        is available; UNAVAILABLE if the routing data isn't installed.
+        connects them (e.g. a point far from any road, or outside the map
+        data); UNAVAILABLE if the routing tiles (or Valhalla) aren't installed.
+        Via points are stops: each ends a leg; the legs are joined into one
+        shape, with the maneuvers' shape indexes into the joined shape.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

@@ -17,8 +17,8 @@ from pathlib import Path
 from mapdata import schema
 
 from . import extracts
-from .build import build
-from .config import MACHINES, QEMU_TARGET, Settings, toolkit_version
+from .build import build, extract_timestamp
+from .config import MACHINES, QEMU_TARGET, Settings, routing_cache_dir, toolkit_version
 from .push import PushError, live_swap, update_image
 
 
@@ -33,8 +33,16 @@ def run_build(settings, output=None, log=print, progress=None, status=None, canc
                              f"({exc}). Move it away or choose another output.")
     paths = [extracts.fetch(e, settings.cache_dir, log=log, progress=progress, cancelled=cancelled)
              for e in settings.region.extracts]
+    routing = None
+    if settings.routing:
+        from . import routing as valhalla_routing
+
+        sources = [{"id": e, "osm_timestamp": extract_timestamp(p), "size": p.stat().st_size}
+                   for e, p in zip(settings.region.extracts, paths)]
+        routing = valhalla_routing.build_tiles(paths, sources, routing_cache_dir(settings.cache_dir),
+                                               log=log, cancelled=cancelled)
     return build(settings.region, settings.categories, out, paths, log=log, progress=status, cancelled=cancelled,
-                 toolkit_version=toolkit_version())
+                 toolkit_version=toolkit_version(), routing=routing)
 
 
 def describe(path):

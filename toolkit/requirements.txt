@@ -1,3 +1,7 @@
 # The map toolkit (laptop only; not part of the device's app). Tk comes with
 # Python (Debian/Ubuntu: python3-tk).
 osmium==4.3.2
+# Routing tiles (valhalla_build_tiles ships in the wheel). Must match the
+# image's Valhalla recipe (and src/requirements/base.txt): routing tiles load
+# with the Valhalla version that built them.
+pyvalhalla==3.9.1

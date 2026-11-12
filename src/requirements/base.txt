@@ -8,3 +8,6 @@ whitenoise==6.6.0
 # gRPC API for the HMI (POIs, routes); generated code in src/e39maps_api.
 grpcio==1.62.2
 protobuf==4.25.3
+# Routing (api/routing.py). Same version as the image's recipe and the map
+# toolkit: routing tiles load with the Valhalla version that built them.
+pyvalhalla==3.9.1

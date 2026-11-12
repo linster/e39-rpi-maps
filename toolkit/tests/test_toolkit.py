@@ -101,6 +101,56 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(set(self.rows()), {"Test Park", "Rel Park"})
 
 
+class RoutingPairTests(unittest.TestCase):
+    """Routing tiles travel with the database: facts, placement, checks."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        (self.dir / "a.osm").write_text(OSM_A)
+        self.region = Region("Test", 45.4215, -75.6972, 100, ["a"])
+        self.out = self.dir / "out" / "map.sqlite"
+        self.tiles = self.dir / "cache" / "tiles.tar"
+        self.tiles.parent.mkdir()
+        self.tiles.write_bytes(b"pretend these are routing tiles" * 1000)
+
+    def run_build(self, routing):
+        return build(self.region, ["fuel"], self.out, [self.dir / "a.osm"], log=lambda *_: None, routing=routing)
+
+    def test_pair_is_recorded_and_checks(self):
+        meta = self.run_build((self.tiles, "3.9.1"))
+        placed = self.out.with_name("map.routing.tar")
+        self.assertEqual(meta["routing_file"], "map.routing.tar")
+        self.assertEqual(meta["valhalla_version"], "3.9.1")
+        self.assertEqual(placed.read_bytes(), self.tiles.read_bytes())
+        stored = schema.check(self.out)
+        self.assertEqual(schema.routing_info(stored)["routing_sha256"], schema.sha256_file(placed))
+        schema.check_routing(stored, placed)
+        placed.write_bytes(b"X" + placed.read_bytes()[1:])        # same size, other content
+        with self.assertRaisesRegex(schema.InvalidMapDatabase, "SHA-256"):
+            schema.check_routing(stored, placed)
+        with self.assertRaisesRegex(schema.InvalidMapDatabase, "missing"):
+            schema.check_routing(stored, self.dir / "nope.tar")
+
+    def test_without_routing_removes_stale_tiles(self):
+        self.run_build((self.tiles, "3.9.1"))
+        meta = self.run_build(None)
+        self.assertIsNone(schema.routing_info(meta))
+        self.assertFalse(self.out.with_name("map.routing.tar").exists())
+
+    def test_update_image_copies_the_pair(self):
+        self.run_build((self.tiles, "3.9.1"))
+        yocto = self.dir / "yocto"
+        (yocto / "scripts").mkdir(parents=True)
+        (yocto / "scripts" / "build.sh").write_text("")
+        data = push.yocto_data_dir(yocto)
+        data.mkdir(parents=True)
+        (data / "old.routing.tar").write_text("stale")
+        push.update_image(self.out, yocto, "qemuarm64", build=False, log=lambda *_: None)
+        self.assertEqual(sorted(p.name for p in data.iterdir()), ["e39maps-osm.sqlite", "map.routing.tar"])
+        meta = schema.check(data / "e39maps-osm.sqlite")
+        schema.check_routing(meta, data / meta["routing_file"])
+
+
 class SchemaCheckTests(unittest.TestCase):
 
     def test_rejects_other_files(self):

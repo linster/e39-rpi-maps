@@ -166,5 +166,13 @@ class RouteService(routes_pb2_grpc.RouteServiceServicer):
 
     @rpc
     def ComputeRoute(self, request, context):
-        context.abort(grpc.StatusCode.UNIMPLEMENTED,
-                      "routing isn't available yet (it comes with Valhalla)")
+        from .routing import BadRequest, NoRoute, RoutingUnavailable, get_router
+
+        try:
+            return get_router().route(request)
+        except BadRequest as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        except NoRoute as exc:
+            context.abort(grpc.StatusCode.NOT_FOUND, f"no route: {exc}")
+        except RoutingUnavailable as exc:
+            context.abort(grpc.StatusCode.UNAVAILABLE, f"routing unavailable: {exc}")

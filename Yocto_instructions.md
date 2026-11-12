@@ -16,6 +16,7 @@ dependencies, data files), update this file **and** the recipes.
 | Yocto | scarthgap, Python 3.12 |
 | Django stack (meta-python) | Django 5.0.11, asgiref 3.8.1, sqlparse 0.4.4, WhiteNoise 6.6.0, gunicorn 21.2.0; `src/requirements/` pins the same |
 | gRPC (meta-python) | grpcio 1.62.2, protobuf 4.25.3; the generated code in `src/e39maps_api` must come from `grpcio-tools` 1.62.2 (`src/requirements/dev.txt`) |
+| Routing | Valhalla 3.9.1 (`python3-valhalla`, a recipe in meta-e39rpi-maps: library + Python module, no data tools); pyvalhalla 3.9.1 on the laptop (`src/requirements/base.txt`, the toolkit). Routing tiles only load with the Valhalla version that built them: change all three together |
 | Extra stdlib packages | `python3-sqlite3`, `python3-zoneinfo`, `python3-statistics`, `tzdata-core` (UTC only) |
 | Not available | pip/venv on the device, GDAL (GeoDjango), PostGIS |
 
@@ -31,7 +32,7 @@ packages in Yocto; a newly imported one may need adding too.
 | WSGI entry | `e39maps.wsgi:application`, run from the app directory |
 | Management | `python3 manage.py migrate --noinput`, `collectstatic --noinput --clear`, `run_grpc_server` (runs until SIGTERM) |
 | Settings | environment variables only (below) |
-| Map data | `output/db/e39maps-osm.sqlite` (Git LFS) + `output/db/ATTRIBUTION.txt` |
+| Map data | `output/db/e39maps-osm.sqlite` (Git LFS) + its routing tiles `output/db/e39maps-osm.routing.tar` (named in the database's facts) + `output/db/ATTRIBUTION.txt` |
 | Map database format | `src/mapdata/schema.py`: importable **without Django** (the device's `e39maps-mapdb` and the toolkit import it); `schema.check(path)` validates a file |
 
 Environment on the device (`/etc/default/e39maps`):
@@ -46,6 +47,8 @@ Environment on the device (`/etc/default/e39maps`):
 | `DJANGO_STATIC_ROOT` | `/var/lib/e39maps/static` |
 | `DJANGO_DEV_ADMIN` | `admin:e39rpi`, development images only (`/etc/default/e39maps-dev-admin`) |
 | `DJANGO_GRPC_BIND` | `0.0.0.0:50051` (default) |
+| `DJANGO_ROUTING_TILES_PATH` | `/usr/share/e39rpi-maps/data/e39maps-routing.tar` |
+| `DJANGO_ROUTING_CACHE_MB` | `64` |
 
 ## How it runs
 
@@ -79,6 +82,5 @@ Environment on the device (`/etc/default/e39maps`):
 
 ## Still to come
 
-Valhalla (Python bindings, routing tiles from the toolkit; then
-`RouteService`); pre-rendered tiles over HTTP; the map database timestamp in
-the HMI's `version.conf`.
+Pre-rendered tiles over HTTP; the map database timestamp in the HMI's
+`version.conf`; the HMI's guidance using `RouteService`.

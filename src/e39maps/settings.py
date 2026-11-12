@@ -155,6 +155,13 @@ DATABASE_ROUTERS = ["e39maps.routers.MapDataRouter"]
 GRPC_BIND = os.environ.get("DJANGO_GRPC_BIND", "0.0.0.0:50051")
 GRPC_MAX_WORKERS = int(os.environ.get("DJANGO_GRPC_MAX_WORKERS", "4"))
 
+# Routing (api/routing.py, Valhalla): the routing tiles the map toolkit
+# builds with the map database, and Valhalla's tile cache in MB (the tiles
+# are memory-mapped; the cache holds decoded tiles).
+ROUTING_TILES_PATH = Path(os.environ.get(
+    "DJANGO_ROUTING_TILES_PATH", MAP_DB_PATH.parent / "e39maps-routing.tar"))
+ROUTING_CACHE_MB = int(os.environ.get("DJANGO_ROUTING_CACHE_MB", "64"))
+
 
 # --- Logging ----------------------------------------------------------------
 # Everything to stderr, which systemd puts in the journal. Django's default
