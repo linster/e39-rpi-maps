@@ -93,11 +93,32 @@ class Router:
                 import valhalla
             except ImportError as exc:
                 raise RoutingUnavailable(f"Valhalla isn't installed ({exc})") from exc
+            self._check_versions(valhalla)
             config = valhalla.get_config(tile_extract=self.tiles_path, tile_dir="")
             config["mjolnir"]["max_cache_size"] = self.cache_mb * 1024 * 1024
             self._actor = valhalla.Actor(config)
             log.info("Valhalla ready: %s", self.tiles_path)
         return self._actor
+
+    @staticmethod
+    def _check_versions(valhalla):
+        """Tiles load only with the Valhalla that built them: refuse a
+        mismatch with a clear reason instead of failing obscurely."""
+        from mapdata import schema
+
+        running = getattr(valhalla, "__version__", "").split("-")[0]
+        if running != schema.VALHALLA_VERSION:
+            log.warning("Valhalla %s is installed, but this app is frozen to %s",
+                        running, schema.VALHALLA_VERSION)
+        try:
+            from mapdata.models import MapMeta
+
+            built_with = MapMeta.as_dict().get("valhalla_version")
+        except Exception:       # no (readable) map database: nothing to compare
+            built_with = None
+        if built_with and built_with.split("-")[0] != running:
+            raise RoutingUnavailable(
+                f"the routing tiles were built with Valhalla {built_with}, this is Valhalla {running}")
 
     def route(self, request: routes_pb2.ComputeRouteRequest) -> routes_pb2.Route:
         points = [request.origin, *request.via, request.destination]

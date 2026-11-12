@@ -25,6 +25,11 @@ INSTALLER = "/usr/libexec/e39maps-mapdb"
 DB_NAME = "e39maps-osm.sqlite"
 
 
+# Reads the device's Valhalla version without importing the module.
+DEVICE_VALHALLA_VERSION = ("cat /usr/lib/python3*/site-packages/valhalla/__version__.py 2>/dev/null "
+                           "| sed -n 's/^__version__ = \"\\(.*\\)\"/\\1/p' | grep . || echo none")
+
+
 class PushError(Exception):
     pass
 
@@ -89,6 +94,16 @@ def live_swap(db_path, target, user="root", password="", log=print):
     if lines[-1:] != ["ok"]:
         raise PushError(f"{host} has no {INSTALLER}: its image is older than the map toolkit; "
                         "update the image first")
+    if tiles:
+        # Tiles only load with the Valhalla that built them: ask the device.
+        code, lines = _run(ssh + [DEVICE_VALHALLA_VERSION], log, 30)
+        device = (lines[-1] if lines else "").strip()
+        built = meta["valhalla_version"].split("-")[0]
+        if not device or device == "none":
+            raise PushError(f"{host} has no Valhalla (python3-valhalla): update its image first")
+        if device.split("-")[0] != built:
+            raise PushError(f"{host} has Valhalla {device}, but these routing tiles were built with {built}: "
+                            "they wouldn't load. Update the image, or build with the matching pyvalhalla.")
 
     copies = [(db_path, INCOMING)] + ([(tiles, INCOMING_ROUTING)] if tiles else [])
     for src, dest in copies:

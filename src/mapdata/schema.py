@@ -21,6 +21,15 @@ import sqlite3
 APPLICATION_ID = 0x45333950  # "E39P"
 SCHEMA_VERSION = 1
 
+# The Valhalla version, frozen: routing tiles only load with the Valhalla
+# that built them, so the toolkit (which builds them), the backend (which
+# reads them) and the image's valhalla recipe must all use this one. Pinned
+# as pyvalhalla==VALHALLA_VERSION in src/requirements/base.txt and
+# toolkit/requirements.txt, and as E39_VALHALLA_VERSION in e39-rpi-yocto's
+# meta-e39rpi-maps (tests and the e39maps recipe check they agree). Change
+# them all together, and rebuild the routing tiles.
+VALHALLA_VERSION = "3.9.1"
+
 # What a POI from the map data is. The keys are stored in map_poi.category
 # and are the API's PoiCategory names in lower case (e39maps.v1).
 CATEGORIES = {

@@ -20,6 +20,7 @@ from . import extracts
 from .build import build, extract_timestamp
 from .config import MACHINES, QEMU_TARGET, Settings, routing_cache_dir, toolkit_version
 from .push import PushError, live_swap, update_image
+from . import versions
 
 
 def run_build(settings, output=None, log=print, progress=None, status=None, cancelled=lambda: False):
@@ -71,6 +72,9 @@ def main(argv=None):
     p.add_argument("--no-build", action="store_true", help="only install into the build's map data")
     args = parser.parse_args(argv)
     settings = Settings.load()
+    if args.command in ("build", "push", "update-image"):
+        for problem in versions.problems(settings.yocto_dir):
+            print(f"WARNING: {problem}", file=sys.stderr)
 
     try:
         if args.command in (None, "gui"):

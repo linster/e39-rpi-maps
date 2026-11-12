@@ -169,6 +169,45 @@ class SchemaCheckTests(unittest.TestCase):
             schema.check(d / "empty.sqlite")
 
 
+class VersionTests(unittest.TestCase):
+
+    def yocto(self, layer_conf=None, recipe=None):
+        y = Path(tempfile.mkdtemp())
+        layer = y / "layers" / "meta-e39rpi-maps"
+        (layer / "conf").mkdir(parents=True)
+        (layer / "recipes-maps" / "valhalla").mkdir(parents=True)
+        if layer_conf:
+            (layer / "conf" / "layer.conf").write_text(layer_conf)
+        if recipe:
+            (layer / "recipes-maps" / "valhalla" / recipe).write_text("")
+        return y
+
+    def test_yocto_version(self):
+        from e39maps_toolkit import versions
+
+        self.assertEqual(versions.yocto_version(self.yocto('E39_VALHALLA_VERSION = "3.9.1"\n')), "3.9.1")
+        self.assertEqual(versions.yocto_version(self.yocto("# none\n", "valhalla_3.8.3.bb")), "3.8.3")
+        self.assertIsNone(versions.yocto_version(self.yocto()))
+        self.assertIsNone(versions.yocto_version(""))
+
+    def test_problems(self):
+        from unittest import mock
+
+        from e39maps_toolkit import versions
+
+        frozen = schema.VALHALLA_VERSION
+        same = self.yocto(f'E39_VALHALLA_VERSION = "{frozen}"\n')
+        with mock.patch.object(versions, "toolkit_version", return_value=frozen):
+            self.assertEqual(versions.problems(same), [])
+            found = versions.problems(self.yocto('E39_VALHALLA_VERSION = "3.0.0"\n'))
+            self.assertEqual(len(found), 1)
+            self.assertIn("image's valhalla recipe is 3.0.0", found[0])
+        with mock.patch.object(versions, "toolkit_version", return_value="3.0.0"):
+            self.assertIn("toolkit's pyvalhalla is 3.0.0", versions.problems(same)[0])
+        with mock.patch.object(versions, "toolkit_version", return_value=None):
+            self.assertIn("isn't installed", versions.problems(same)[0])
+
+
 class MiscTests(unittest.TestCase):
 
     def test_default_radius_reaches_london_and_quebec_city(self):

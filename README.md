@@ -109,6 +109,10 @@ from a copy (`java_package ca.stefanm.e39maps.v1`).
 | `e39maps.v1.PoiService` | `ListPois`, `GetPoi`, `CreatePoi`, `UpdatePoi` (with a `FieldMask`), `DeletePoi`, `SearchPois` (near a point with a radius, nearest first, or in a bounding box; by name; by category; visible only; limit 50, max 500) | the user's POIs (`pois` app, state database; also editable in the Django admin); `SearchPois` with `sources: MAP` also finds POIs from the map database (category, OSM details) |
 | `e39maps.v1.RouteService` | `ComputeRoute` (origin, destination, via points as stops, km/miles, instruction language → shape, length, duration, maneuvers with Valhalla's types, instructions and street names) | Valhalla in-process (`api/routing.py`), car costing, the map's routing tiles; `UNAVAILABLE` without them, `NOT_FOUND` when no road connects the points |
 
+Routes and maneuvers (each with a location, a trigger radius and an
+instruction), how the HMI should use them, and the frozen Valhalla version:
+[`map_maneuvers.md`](map_maneuvers.md).
+
 Errors are gRPC status codes: `NOT_FOUND` (no POI with that id),
 `INVALID_ARGUMENT` (no name or location, coordinates out of range, a field
 that isn't editable, a negative limit, a radius of 0).

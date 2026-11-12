@@ -239,6 +239,8 @@ GRID_OSM = """<?xml version='1.0' encoding='UTF-8'?>
 class ValhallaRouteTests(GrpcTestCase):
     """ComputeRoute with real Valhalla tiles, built from GRID_OSM."""
 
+    databases = {"default", "mapdata"}
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -323,6 +325,19 @@ class ValhallaRouteTests(GrpcTestCase):
         self.assertAlmostEqual(km.length_meters, mi.length_meters, delta=5)
         self.assertIn("gauche", " ".join(m.instruction for m in mi.maneuvers).lower())
 
+    def test_tiles_from_another_valhalla_are_refused(self):
+        from django.db import connections
+
+        with connections["mapdata"].cursor() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS e39maps_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            c.execute("INSERT OR REPLACE INTO e39maps_meta VALUES ('valhalla_version', '0.0.1')")
+        try:
+            err = self.assertStatus(grpc.StatusCode.UNAVAILABLE, self.route, (45.420, -75.710), (45.424, -75.706))
+            self.assertIn("built with Valhalla 0.0.1", err.details())
+        finally:
+            with connections["mapdata"].cursor() as c:
+                c.execute("DELETE FROM e39maps_meta WHERE key = 'valhalla_version'")
+
     def test_no_route_and_bad_input(self):
         self.assertStatus(grpc.StatusCode.NOT_FOUND, self.route, (45.420, -75.710), (45.5005, -75.500))
         self.assertStatus(grpc.StatusCode.INVALID_ARGUMENT, self.route, (95, 0), (45.42, -75.70))
@@ -401,3 +416,16 @@ class MapPoiSearchTests(GrpcTestCase):
             c.execute("DROP TABLE map_poi")
         results = self.search(sources=[pois_pb2.POI_SOURCE_USER, pois_pb2.POI_SOURCE_MAP])
         self.assertEqual([r.poi.name for r in results], ["Parliament"])
+
+
+class ValhallaVersionFreezeTests(unittest.TestCase):
+    """The Valhalla version is frozen in mapdata.schema; the pip pins must agree."""
+
+    def test_pins_match_the_frozen_version(self):
+        from mapdata import schema
+
+        root = Path(__file__).resolve().parents[2]
+        for rel in ("src/requirements/base.txt", "toolkit/requirements.txt"):
+            pins = [line.split("==")[1].strip() for line in (root / rel).read_text().splitlines()
+                    if line.startswith("pyvalhalla==")]
+            self.assertEqual(pins, [schema.VALHALLA_VERSION], rel)

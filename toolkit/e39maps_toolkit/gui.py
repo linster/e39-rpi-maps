@@ -11,6 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 from mapdata import schema
 
 from .config import MACHINES, QEMU_TARGET
+from . import versions
 from .push import PushError, live_swap, update_image
 
 PAD = {"padx": 6, "pady": 3}
@@ -49,6 +50,7 @@ class ToolkitWindow:
 
         self.refresh_db_info()
         root.after(100, self.pump)
+        root.after(300, self.check_versions)
 
     # --- layout ------------------------------------------------------------
 
@@ -142,6 +144,21 @@ class ToolkitWindow:
                                                                          sticky="w", **PAD)
         return f
 
+    def check_versions(self, before=None):
+        """Warn about a Valhalla mismatch (log; a dialog before building or
+        updating the image). Returns False if the user cancels."""
+        found = versions.problems(self.yocto_dir.get().strip())
+        if before is None:
+            self.log(versions.summary(self.yocto_dir.get().strip()))
+            for p in found:
+                self.log(f"WARNING: {p}")
+            return True
+        if not found:
+            return True
+        return messagebox.askokcancel(
+            "Valhalla version mismatch",
+            "\n\n".join(found) + f"\n\n{before} anyway?", icon="warning")
+
     # --- settings ----------------------------------------------------------
 
     def collect(self):
@@ -227,6 +244,8 @@ class ToolkitWindow:
         if not any(v.get() for v in self.category_vars.values()):
             messagebox.showerror("Map toolkit", "Choose at least one POI category.")
             return
+        if self.routing.get() and not self.check_versions("Build"):
+            return
         self.cancel_button.configure(state="normal")
 
         def download_progress(done, total):
@@ -251,6 +270,8 @@ class ToolkitWindow:
         self.run_task(f"Live swap on {self.collect().target or 'device'}", work)
 
     def start_update_image(self):
+        if not self.check_versions("Update the image"):
+            return
         build = self.build_image.get()
 
         def work(settings):
