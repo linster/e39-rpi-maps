@@ -1,0 +1,4 @@
+-r prod.txt
+# Code generation for proto/ (scripts/gen-proto.sh): pinned to the image's
+# grpcio, so the generated code loads on the device.
+grpcio-tools==1.62.2

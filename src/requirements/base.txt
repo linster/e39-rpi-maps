@@ -5,3 +5,6 @@ Django==5.0.11
 asgiref==3.8.1
 sqlparse==0.4.4
 whitenoise==6.6.0
+# gRPC API for the HMI (POIs, routes); generated code in src/e39maps_api.
+grpcio==1.62.2
+protobuf==4.25.3

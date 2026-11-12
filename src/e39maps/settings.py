@@ -78,6 +78,8 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "core",
     "mapdata",
+    "pois",
+    "api",
 ]
 
 MIDDLEWARE = [
@@ -146,6 +148,12 @@ DATABASES = {
 }
 
 DATABASE_ROUTERS = ["e39maps.routers.MapDataRouter"]
+
+
+# --- gRPC API for the HMI (api/, `manage.py run_grpc_server`) -------------
+
+GRPC_BIND = os.environ.get("DJANGO_GRPC_BIND", "0.0.0.0:50051")
+GRPC_MAX_WORKERS = int(os.environ.get("DJANGO_GRPC_MAX_WORKERS", "4"))
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

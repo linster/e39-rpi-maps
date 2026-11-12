@@ -39,6 +39,53 @@ Run the tests with:
 python manage.py test
 ```
 
+The gRPC API for the HMI (next section) runs as its own process:
+
+```sh
+python manage.py run_grpc_server     # 0.0.0.0:50051, DJANGO_GRPC_BIND
+```
+
+## gRPC API (for the HMI)
+
+The HMI talks to this backend over gRPC for POIs and routes (map tiles will
+be plain HTTP). The contract is in [`proto/e39maps_api/v1/`](proto/e39maps_api/v1/);
+this repository owns it, and the HMI (e39-rpi) generates its Kotlin client
+from a copy (`java_package ca.stefanm.e39maps.v1`).
+
+| Service | RPCs | State |
+| --- | --- | --- |
+| `e39maps.v1.PoiService` | `ListPois`, `GetPoi`, `CreatePoi`, `UpdatePoi` (with a `FieldMask`), `DeletePoi`, `SearchPois` (near a point with a radius, nearest first, or in a bounding box; by name; visible only; limit 50, max 500) | the user's POIs (`pois` app, state database; also editable in the Django admin) |
+| `e39maps.v1.RouteService` | `ComputeRoute` (origin, destination, via points → shape, length, duration, maneuvers in Valhalla's terms) | answers `UNIMPLEMENTED` until Valhalla is in |
+
+Errors are gRPC status codes: `NOT_FOUND` (no POI with that id),
+`INVALID_ARGUMENT` (no name or location, coordinates out of range, a field
+that isn't editable, a negative limit, a radius of 0).
+
+`v1` only changes compatibly (new fields, RPCs, enum values); anything else
+becomes `v2`. The proto package path is `e39maps_api`, not `e39maps`, so the
+generated Python package doesn't collide with the Django project package.
+
+**After changing a `.proto`**, regenerate the Python code (committed in
+`src/e39maps_api/`, since neither the device nor the Yocto build runs
+`protoc`):
+
+```sh
+pip install -r src/requirements/dev.txt   # grpcio-tools 1.62.2
+scripts/gen-proto.sh
+```
+
+`grpcio-tools` is pinned to the image's `grpcio` 1.62.2 / `protobuf` 4.25.3:
+code from a newer generator can refuse to load with the older runtime.
+
+Try it from the shell with [grpcurl](https://github.com/fullstorydev/grpcurl)
+(the server has no reflection, so pass the protos):
+
+```sh
+grpcurl -plaintext -import-path proto -proto e39maps_api/v1/pois.proto \
+  -d '{"poi": {"name": "Home", "location": {"latitude": 45.42, "longitude": -75.69}}}' \
+  localhost:50051 e39maps.v1.PoiService/CreatePoi
+```
+
 ## Layout
 
 ```
@@ -48,8 +95,14 @@ src/
 │                   database router, SQLite connection setup)
 ├── core/           hello-world app (view, template, static CSS, tests)
 ├── mapdata/        models of the read-only map database (unmanaged)
-├── requirements/   base.txt (runtime), prod.txt (+ gunicorn)
+├── pois/           the user's POIs (state database, admin)
+├── api/            gRPC services + `run_grpc_server` command
+├── e39maps_api/    Python generated from proto/ (scripts/gen-proto.sh)
+├── requirements/   base.txt (runtime), prod.txt (+ gunicorn),
+│                   dev.txt (+ grpcio-tools)
 └── .env.example    configuration reference
+proto/              the gRPC contract (.proto)
+scripts/            gen-proto.sh
 output/db/          pre-populated map database (Git LFS) + ODbL attribution
 ```
 
@@ -57,7 +110,7 @@ The split matters for the Yocto build: the recipe installs `src/` as the
 application and ships `output/db/` as a separate `e39maps-data` package, so a
 large database does not rebuild the code (and vice versa).
 
-Future apps (`maps`, `routing`, `pois`, `api`) slot in next to `core`.
+Future apps (`maps`, `routing`) slot in next to `core`.
 
 The database in `output/db/` is stored with **Git LFS** (there is no artifact
 server); see [`output/db/README.md`](output/db/README.md). Run `git lfs install`
@@ -79,6 +132,8 @@ important ones:
 | `DJANGO_STATIC_ROOT` | `src/staticfiles` | Writable location for `collectstatic`. |
 | `DJANGO_HTTPS` | `0` | Set to `1` to enable HSTS and secure cookies. |
 | `DJANGO_DEV_ADMIN` | `admin:e39rpi` with `DEBUG`, else unset | `user:password` of a superuser `migrate` creates if missing; empty = none. |
+| `DJANGO_GRPC_BIND` | `0.0.0.0:50051` | Where `run_grpc_server` listens. |
+| `DJANGO_GRPC_MAX_WORKERS` | `4` | gRPC server threads (concurrent calls). |
 
 `DJANGO_DEBUG=0` also enables WhiteNoise's compressed, hashed static storage,
 so run `collectstatic` as part of the build/install step.
@@ -228,18 +283,12 @@ Do the expensive work off-device:
 
 ### 5. gRPC
 
-- `grpcio` is a native extension with a large C++ build. Check whether
-  `meta-python` provides a matching `python3-grpcio` first; otherwise a custom
-  recipe is needed and it will dominate build time. Build it on the x86 build
-  host, never on the Pi.
-- A pure-Python server such as `grpclib` is dramatically easier to package but
-  slower per request. For a handful of streaming clients on a Pi that may be an
-  acceptable trade; benchmark before committing.
-- Run the gRPC server as a **separate systemd service** from the WSGI app
-  (e.g. a `manage.py run_grpc_server` management command). That isolates
-  crashes and lets each service get its own memory limit. The alternative —
-  embedding gRPC in the web process — saves one interpreter but couples
-  failure modes.
+- `grpcio` 1.62.2 and `protobuf` 4.25.3 come from scarthgap's meta-python
+  (`python3-grpcio`, a large C++ build on the x86 build host);
+  `src/requirements/base.txt` pins the same.
+- The gRPC server is a **separate systemd service** from the WSGI app
+  (`manage.py run_grpc_server`, port 50051). That isolates crashes and gives
+  each service its own memory limit.
 - Long-lived streams pin threads/connections. Prefer a small number of
   streams and a bounded queue; don't size the server for "many clients".
 
@@ -289,5 +338,5 @@ it's not the default.
 1. Hello world page and health endpoint. ✅
 2. Add GeoDjango + SpatiaLite, a `places` model, admin registration.
 3. Import a regional OSM extract on the build host.
-4. Add the gRPC service for streaming POIs/routes.
+4. gRPC service: user POIs (CRUD, search) ✅; routes after Valhalla.
 5. Test the BitBake recipe + systemd units on the Pi.
