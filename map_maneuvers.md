@@ -121,3 +121,7 @@ version; the device's installer refuses such a pair too; the backend
 answers `UNAVAILABLE` ("tiles were built with Valhalla X, this is Y")
 instead of failing obscurely. To change versions: all pins at once, then
 rebuild the routing tiles and the image.
+
+The toolkit's container (`toolkit/map-toolkit-container.sh`) installs
+exactly the pinned pyvalhalla, so the laptop's own Python packages can't
+cause a mismatch.

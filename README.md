@@ -51,9 +51,25 @@ python manage.py run_grpc_server     # 0.0.0.0:50051, DJANGO_GRPC_BIND
 device. It isn't part of the app installed on the device.
 
 ```sh
-toolkit/map-toolkit.sh          # the window (Tk); creates toolkit/.venv the first time
-toolkit/map-toolkit.sh --help   # the same as commands: build, info, push, update-image
+toolkit/map-toolkit-container.sh          # the window, in a container (podman or docker)
+toolkit/map-toolkit-container.sh --help   # the same as commands: build, info, push, update-image
+toolkit/map-toolkit.sh                    # or without a container: creates toolkit/.venv
 ```
+
+**The container** (`toolkit/Dockerfile`, Python 3.12, Tk, ssh/sshpass,
+pyosmium, pyvalhalla) always has the pinned Valhalla, whatever the laptop
+has; it's built on first use and when `toolkit/requirements.txt` or the
+Dockerfile change (tagged `e39maps-toolkit:valhalla-<version>-<hash>`,
+~530 MB). The toolkit's code is mounted from this checkout (no rebuild for
+code changes), and so are its cache, settings, `~/.ssh` (read-only) and the
+e39-rpi-yocto checkout, at the same paths as on the host; files it writes
+are yours (rootless podman `--userns=keep-id`, docker `--user`). Host
+network (QEMU's `localhost:2222`, downloads) and the host's X display.
+"Update image" needs bitbake on the host: the launcher keeps a helper
+running that starts the image build there when the toolkit asks (a request
+file in a shared directory). Inside the container the routing tiles are
+copied beside the database rather than hard-linked from the cache
+(different mounts), so they take 625 MB more disk.
 
 - **Build map database**: downloads the OpenStreetMap extracts of the region
   from Geofabrik (cached in `~/.cache/e39maps-toolkit/extracts`, refreshed
@@ -95,7 +111,8 @@ backend and the device's installer: SQLite with `application_id` "E39P" and
 `user_version` = format version, `e39maps_meta` facts (`built_at`,
 `region`, `poi_count`, the extracts' OSM timestamps, ...) and `map_poi`.
 Toolkit tests: `PYTHONPATH=toolkit:src toolkit/.venv/bin/python -m unittest
-discover -s toolkit/tests`.
+discover -s toolkit/tests` (needs pyosmium and pyvalhalla: the venv or the
+container's Python).
 
 ## gRPC API (for the HMI)
 

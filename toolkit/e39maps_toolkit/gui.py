@@ -149,6 +149,11 @@ class ToolkitWindow:
         updating the image). Returns False if the user cancels."""
         found = versions.problems(self.yocto_dir.get().strip())
         if before is None:
+            import os
+
+            container = os.environ.get("E39MAPS_TOOLKIT_CONTAINER")
+            if container:
+                self.log(f"Running in the toolkit container ({container}).")
             self.log(versions.summary(self.yocto_dir.get().strip()))
             for p in found:
                 self.log(f"WARNING: {p}")

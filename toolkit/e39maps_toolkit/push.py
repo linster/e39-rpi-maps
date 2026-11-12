@@ -10,10 +10,13 @@ Update image: put the file where the Yocto build reads the map data and
 start the image build, so the next image (QEMU, SD card) contains it.
 """
 
+import json
+import os
 import re
 import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 from mapdata import schema
@@ -158,11 +161,34 @@ def update_image(db_path, yocto_dir, machine, build=True, log=print):
     if not build:
         return None
     log(f"Starting the image build for {machine} (progress window)...")
-    out = subprocess.run([str(yocto_dir / "scripts" / "with-progress.sh"), "scripts/build.sh", machine],
-                         cwd=yocto_dir, capture_output=True, text=True, timeout=60)
-    for line in (out.stdout + out.stderr).splitlines():
+    host_builds = os.environ.get("E39MAPS_HOST_BUILDS")
+    if host_builds:
+        text, ok = _request_host_build(Path(host_builds), yocto_dir, machine)
+    else:
+        out = subprocess.run([str(yocto_dir / "scripts" / "with-progress.sh"), "scripts/build.sh", machine],
+                             cwd=yocto_dir, capture_output=True, text=True, timeout=60)
+        text, ok = out.stdout + out.stderr, out.returncode == 0
+    for line in text.splitlines():
         log(f"  {line}")
-    if out.returncode != 0:
+    if not ok:
         raise PushError("couldn't start the build")
-    m = re.search(r"log: (\S+)", out.stdout)
+    m = re.search(r"log: (\S+)", text)
     return m.group(1) if m else None
+
+
+def _request_host_build(requests, yocto_dir, machine, timeout=120):
+    """In the toolkit container (map-toolkit-container.sh): bitbake runs on
+    the host, so ask the launcher's helper to start the build there."""
+    rid = uuid.uuid4().hex
+    tmp = requests / f"{rid}.tmp"
+    tmp.write_text(json.dumps({"yocto_dir": str(yocto_dir), "machine": machine}))
+    tmp.rename(requests / f"{rid}.request")
+    reply = requests / f"{rid}.reply"
+    deadline = time.monotonic() + timeout
+    while not reply.exists():
+        if time.monotonic() > deadline:
+            raise PushError("the host didn't start the build (is map-toolkit-container.sh's helper running?)")
+        time.sleep(0.5)
+    text = reply.read_text()
+    reply.unlink()
+    return text, text.rstrip().endswith("exit=0")
