@@ -45,6 +45,49 @@ The gRPC API for the HMI (next section) runs as its own process:
 python manage.py run_grpc_server     # 0.0.0.0:50051, DJANGO_GRPC_BIND
 ```
 
+## Map toolkit
+
+`toolkit/` builds the **map database** on the laptop and gets it onto a
+device. It isn't part of the app installed on the device.
+
+```sh
+toolkit/map-toolkit.sh          # the window (Tk); creates toolkit/.venv the first time
+toolkit/map-toolkit.sh --help   # the same as commands: build, info, push, update-image
+```
+
+- **Build map database**: downloads the OpenStreetMap extracts of the region
+  from Geofabrik (cached in `~/.cache/e39maps-toolkit/extracts`, refreshed
+  when Geofabrik has newer ones, MD5-checked), keeps the POIs of the chosen
+  categories inside the region's circle and writes
+  `output/db/e39maps-osm.sqlite`. Default region: centred on Ottawa, 530 km,
+  reaching London ON and Quebec City; Canada only (the Ontario and Quebec
+  extracts, ~2.2 GB). Categories: fuel stations, restaurants (incl. fast
+  food), ski hills, museums, airports, parks, trailheads, car parts stores,
+  junkyards (OSM tags: `toolkit/e39maps_toolkit/categories.py`). Named
+  objects only, except fuel stations and car parts stores (brand/operator
+  instead).
+- **Live swap** (QEMU on `localhost:2222`, or a device's host/IP): copies
+  the database over ssh next to the installed one, then the device's
+  installer (`e39maps-mapdb`, Yocto layer) checks it, stops the services
+  using the map database, swaps it in and starts them again. The state
+  database (users, the user's POIs) isn't touched.
+- **Update image**: copies the database to where the Yocto build reads the
+  map data (the e39-rpi-maps submodule's `output/db` in e39-rpi-yocto, or
+  `E39_MAPS_DATA_DIR` from its `local.conf`) and starts the image build
+  (qemuarm64 or raspberrypi4-64) with its progress window, so `run-qemu.sh`
+  and the SD card tools use an image with this map.
+- **USB stick** (no laptop needed): put the database in a folder `RPIMAPS`
+  on a stick and plug it into the device; it's checked and installed, then
+  renamed on the stick to `<name>.copied-<date-time>` (invalid files:
+  `.rejected-...`; older ones next to a newer: `.skipped-...`).
+
+The file format is `src/mapdata/schema.py`, shared by the toolkit, the
+backend and the device's installer: SQLite with `application_id` "E39P" and
+`user_version` = format version, `e39maps_meta` facts (`built_at`,
+`region`, `poi_count`, the extracts' OSM timestamps, ...) and `map_poi`.
+Toolkit tests: `PYTHONPATH=toolkit:src toolkit/.venv/bin/python -m unittest
+discover -s toolkit/tests`.
+
 ## gRPC API (for the HMI)
 
 The HMI talks to this backend over gRPC for POIs and routes (map tiles will
@@ -54,7 +97,7 @@ from a copy (`java_package ca.stefanm.e39maps.v1`).
 
 | Service | RPCs | State |
 | --- | --- | --- |
-| `e39maps.v1.PoiService` | `ListPois`, `GetPoi`, `CreatePoi`, `UpdatePoi` (with a `FieldMask`), `DeletePoi`, `SearchPois` (near a point with a radius, nearest first, or in a bounding box; by name; visible only; limit 50, max 500) | the user's POIs (`pois` app, state database; also editable in the Django admin) |
+| `e39maps.v1.PoiService` | `ListPois`, `GetPoi`, `CreatePoi`, `UpdatePoi` (with a `FieldMask`), `DeletePoi`, `SearchPois` (near a point with a radius, nearest first, or in a bounding box; by name; by category; visible only; limit 50, max 500) | the user's POIs (`pois` app, state database; also editable in the Django admin); `SearchPois` with `sources: MAP` also finds POIs from the map database (category, OSM details) |
 | `e39maps.v1.RouteService` | `ComputeRoute` (origin, destination, via points → shape, length, duration, maneuvers in Valhalla's terms) | answers `UNIMPLEMENTED` until Valhalla is in |
 
 Errors are gRPC status codes: `NOT_FOUND` (no POI with that id),
@@ -103,6 +146,7 @@ src/
 └── .env.example    configuration reference
 proto/              the gRPC contract (.proto)
 scripts/            gen-proto.sh
+toolkit/            the map toolkit (laptop only): build and push map databases
 output/db/          pre-populated map database (Git LFS) + ODbL attribution
 ```
 

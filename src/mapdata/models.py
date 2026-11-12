@@ -26,3 +26,26 @@ class MapMeta(models.Model):
     @classmethod
     def as_dict(cls):
         return dict(cls.objects.values_list("key", "value"))
+
+
+class MapPoi(models.Model):
+    """A POI from OpenStreetMap (map_poi; mapdata.schema). category is a key
+    of mapdata.schema.CATEGORIES; details a JSON object of OSM tags."""
+
+    id = models.BigIntegerField(primary_key=True)
+    osm_type = models.TextField()
+    osm_id = models.BigIntegerField()
+    category = models.TextField()
+    name = models.TextField()
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    details = models.TextField()
+
+    class Meta:
+        managed = False
+        db_table = "map_poi"
+        ordering = ["name", "id"]
+        verbose_name = "map POI"
+
+    def __str__(self):
+        return f"{self.name} ({self.category})"

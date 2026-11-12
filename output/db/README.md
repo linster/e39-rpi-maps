@@ -27,7 +27,7 @@ normally; `git lfs ls-files` should list them.
 
 ```
 output/db/
-├── e39maps-osm.sqlite        # the SpatiaLite/SQLite database (LFS)
+├── e39maps-osm.sqlite        # the SQLite map database, built by the toolkit (LFS)
 ├── ATTRIBUTION.txt           # ODbL notice (committed normally)
 └── README.md                 # this file
 ```
@@ -44,17 +44,11 @@ build. Over 2 GB: keep the files on the build machine and set
 
 ## Building the database
 
-Do this on the x86 build host, never on the Pi (the map toolkit will do it).
-In short:
-
-1. Import a regional Geofabrik `.osm.pbf` into SQLite/SpatiaLite using the
-   same library versions as the image (`libspatialite` 5.0.1, GEOS 3.12.1,
-   PROJ 9.3.1, SQLite 3.45.3).
-2. Checkpoint and clean up:
-   `PRAGMA wal_checkpoint(TRUNCATE); VACUUM; ANALYZE;`, then
-   `PRAGMA integrity_check;` (must print `ok`).
-3. Remove `-wal`/`-shm` files.
-4. Copy the database here as `e39maps-osm.sqlite` and commit it with LFS.
+With the map toolkit, on the laptop, never on the Pi:
+`toolkit/map-toolkit.sh` (window) or `toolkit/map-toolkit.sh build` writes
+`e39maps-osm.sqlite` here (see the main README, "Map toolkit"). The format
+is `src/mapdata/schema.py`; the toolkit refuses to overwrite a file here
+that isn't one of its map databases.
 
 ## Licensing and attribution
 
@@ -66,9 +60,11 @@ installed into `/usr/share/e39rpi-maps/data/` by the data package.
 ## Updating the database
 
 Replace the file, commit it, and bump the parent `e39-rpi-yocto` submodule
-pointer: the next image contains the new database. On a running device the
-map toolkit's push (still to come) replaces just this file; the state
-database, with users and user POIs, is never touched.
+pointer: the next image contains the new database (or use the toolkit's
+"Update image", which puts it straight into the Yocto build). On a running
+device the toolkit's live swap, or a USB stick with an `RPIMAPS` folder,
+replaces just this file; the state database, with users and user POIs, is
+never touched.
 
 ## Quota warning
 

@@ -6,12 +6,13 @@ import math
 
 import grpc
 from django.core.exceptions import ValidationError
-from django.db import close_old_connections
+from django.db import DatabaseError, close_old_connections
 
 from e39maps_api.v1 import pois_pb2, pois_pb2_grpc, routes_pb2_grpc
+from mapdata.models import MapPoi
 from pois.models import Poi
 
-from .convert import EDITABLE, apply_pb_to_poi, poi_to_pb
+from .convert import EDITABLE, apply_pb_to_poi, category_from_pb, map_poi_to_pb, poi_to_pb
 
 log = logging.getLogger(__name__)
 
@@ -111,39 +112,54 @@ class PoiService(pois_pb2_grpc.PoiServiceServicer):
         if limit < 0:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "limit must not be negative")
         limit = min(limit, SEARCH_MAX_LIMIT)
-        if pois_pb2.POI_SOURCE_USER not in sources:
-            # Only user POIs exist in v1 (map POIs come with the map data).
-            return pois_pb2.SearchPoisResponse()
+        area = request.WhichOneof("area")
+        if area == "near" and request.near.radius_meters <= 0:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "near.radius_meters must be > 0")
+        categories = {category_from_pb(c) for c in request.categories}
 
-        pois = Poi.objects.all()
-        if request.visible_only:
-            pois = pois.filter(visible=True)
+        found = []  # (distance, name, PoiResult) from each source
+        if pois_pb2.POI_SOURCE_USER in sources and not categories:
+            pois = Poi.objects.all()
+            if request.visible_only:
+                pois = pois.filter(visible=True)
+            found += self._search(pois, request, area, limit, poi_to_pb)
+        if pois_pb2.POI_SOURCE_MAP in sources:
+            pois = MapPoi.objects.all()
+            if categories:
+                pois = pois.filter(category__in=categories)
+            try:
+                found += self._search(pois, request, area, limit, map_poi_to_pb)
+            except DatabaseError as exc:
+                # No (readable) map database: user POIs only. /healthz says why.
+                log.warning("SearchPois: map database unavailable: %s", exc)
+
+        found.sort(key=lambda f: (f[0], f[1].casefold()) if area == "near" else (f[1].casefold(), f[0]))
+        return pois_pb2.SearchPoisResponse(results=[r for _, _, r in found[:limit]])
+
+    @staticmethod
+    def _search(pois, request, area, limit, to_pb):
+        """Apply the name/area filters to a queryset with name, latitude and
+        longitude; return up to limit (distance, name, PoiResult)."""
         if request.name_contains:
             pois = pois.filter(name__icontains=request.name_contains)
-
-        area = request.WhichOneof("area")
         if area == "bounding_box":
             sw, ne = request.bounding_box.south_west, request.bounding_box.north_east
             pois = pois.filter(latitude__gte=sw.latitude, latitude__lte=ne.latitude,
                                longitude__gte=sw.longitude, longitude__lte=ne.longitude)
-            results = [pois_pb2.PoiResult(poi=poi_to_pb(p)) for p in pois[:limit]]
-        elif area == "near":
-            center, radius = request.near.center, request.near.radius_meters
-            if radius <= 0:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "near.radius_meters must be > 0")
-            # Cheap box first (uses the location index), exact distance after.
-            dlat = math.degrees(radius / EARTH_RADIUS_M)
-            dlon = dlat / max(math.cos(math.radians(center.latitude)), 1e-6)
-            box = pois.filter(latitude__gte=center.latitude - dlat, latitude__lte=center.latitude + dlat,
-                              longitude__gte=center.longitude - dlon, longitude__lte=center.longitude + dlon)
-            found = sorted(
-                ((haversine_m(center.latitude, center.longitude, p.latitude, p.longitude), p) for p in box),
-                key=lambda dp: dp[0])
-            results = [pois_pb2.PoiResult(poi=poi_to_pb(p), distance_meters=d)
-                       for d, p in found if d <= radius][:limit]
-        else:
-            results = [pois_pb2.PoiResult(poi=poi_to_pb(p)) for p in pois[:limit]]
-        return pois_pb2.SearchPoisResponse(results=results)
+        if area != "near":
+            return [(0.0, p.name, pois_pb2.PoiResult(poi=to_pb(p))) for p in pois.order_by("name")[:limit]]
+
+        center, radius = request.near.center, request.near.radius_meters
+        # Cheap box first (uses the location index), exact distance after.
+        dlat = math.degrees(radius / EARTH_RADIUS_M)
+        dlon = dlat / max(math.cos(math.radians(center.latitude)), 1e-6)
+        box = pois.filter(latitude__gte=center.latitude - dlat, latitude__lte=center.latitude + dlat,
+                          longitude__gte=center.longitude - dlon, longitude__lte=center.longitude + dlon)
+        near = sorted(
+            ((d, p) for p in box
+             if (d := haversine_m(center.latitude, center.longitude, p.latitude, p.longitude)) <= radius),
+            key=lambda dp: dp[0])[:limit]
+        return [(d, p.name, pois_pb2.PoiResult(poi=to_pb(p), distance_meters=d)) for d, p in near]
 
 
 class RouteService(routes_pb2_grpc.RouteServiceServicer):

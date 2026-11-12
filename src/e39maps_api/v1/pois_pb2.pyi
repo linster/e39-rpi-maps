@@ -15,9 +15,32 @@ class PoiSource(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     POI_SOURCE_UNSPECIFIED: _ClassVar[PoiSource]
     POI_SOURCE_USER: _ClassVar[PoiSource]
     POI_SOURCE_MAP: _ClassVar[PoiSource]
+
+class PoiCategory(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    POI_CATEGORY_UNSPECIFIED: _ClassVar[PoiCategory]
+    POI_CATEGORY_FUEL: _ClassVar[PoiCategory]
+    POI_CATEGORY_RESTAURANT: _ClassVar[PoiCategory]
+    POI_CATEGORY_SKI_AREA: _ClassVar[PoiCategory]
+    POI_CATEGORY_MUSEUM: _ClassVar[PoiCategory]
+    POI_CATEGORY_AIRPORT: _ClassVar[PoiCategory]
+    POI_CATEGORY_PARK: _ClassVar[PoiCategory]
+    POI_CATEGORY_TRAILHEAD: _ClassVar[PoiCategory]
+    POI_CATEGORY_CAR_PARTS: _ClassVar[PoiCategory]
+    POI_CATEGORY_JUNKYARD: _ClassVar[PoiCategory]
 POI_SOURCE_UNSPECIFIED: PoiSource
 POI_SOURCE_USER: PoiSource
 POI_SOURCE_MAP: PoiSource
+POI_CATEGORY_UNSPECIFIED: PoiCategory
+POI_CATEGORY_FUEL: PoiCategory
+POI_CATEGORY_RESTAURANT: PoiCategory
+POI_CATEGORY_SKI_AREA: PoiCategory
+POI_CATEGORY_MUSEUM: PoiCategory
+POI_CATEGORY_AIRPORT: PoiCategory
+POI_CATEGORY_PARK: PoiCategory
+POI_CATEGORY_TRAILHEAD: PoiCategory
+POI_CATEGORY_CAR_PARTS: PoiCategory
+POI_CATEGORY_JUNKYARD: PoiCategory
 
 class PoiIcon(_message.Message):
     __slots__ = ("none", "colored_circle", "bundled")
@@ -45,7 +68,14 @@ class PoiIcon(_message.Message):
     def __init__(self, none: _Optional[_Union[PoiIcon.NoIcon, _Mapping]] = ..., colored_circle: _Optional[_Union[PoiIcon.ColoredCircle, _Mapping]] = ..., bundled: _Optional[_Union[PoiIcon.BundledIcon, _Mapping]] = ...) -> None: ...
 
 class Poi(_message.Message):
-    __slots__ = ("id", "name", "location", "icon", "visible", "source", "created", "updated")
+    __slots__ = ("id", "name", "location", "icon", "visible", "source", "created", "updated", "category", "details")
+    class DetailsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     LOCATION_FIELD_NUMBER: _ClassVar[int]
@@ -54,6 +84,8 @@ class Poi(_message.Message):
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     CREATED_FIELD_NUMBER: _ClassVar[int]
     UPDATED_FIELD_NUMBER: _ClassVar[int]
+    CATEGORY_FIELD_NUMBER: _ClassVar[int]
+    DETAILS_FIELD_NUMBER: _ClassVar[int]
     id: int
     name: str
     location: _common_pb2.LatLng
@@ -62,7 +94,9 @@ class Poi(_message.Message):
     source: PoiSource
     created: _timestamp_pb2.Timestamp
     updated: _timestamp_pb2.Timestamp
-    def __init__(self, id: _Optional[int] = ..., name: _Optional[str] = ..., location: _Optional[_Union[_common_pb2.LatLng, _Mapping]] = ..., icon: _Optional[_Union[PoiIcon, _Mapping]] = ..., visible: bool = ..., source: _Optional[_Union[PoiSource, str]] = ..., created: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., updated: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    category: PoiCategory
+    details: _containers.ScalarMap[str, str]
+    def __init__(self, id: _Optional[int] = ..., name: _Optional[str] = ..., location: _Optional[_Union[_common_pb2.LatLng, _Mapping]] = ..., icon: _Optional[_Union[PoiIcon, _Mapping]] = ..., visible: bool = ..., source: _Optional[_Union[PoiSource, str]] = ..., created: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., updated: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., category: _Optional[_Union[PoiCategory, str]] = ..., details: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class ListPoisRequest(_message.Message):
     __slots__ = ("visible_only",)
@@ -103,7 +137,7 @@ class DeletePoiRequest(_message.Message):
     def __init__(self, id: _Optional[int] = ...) -> None: ...
 
 class SearchPoisRequest(_message.Message):
-    __slots__ = ("near", "bounding_box", "name_contains", "visible_only", "limit", "sources")
+    __slots__ = ("near", "bounding_box", "name_contains", "visible_only", "limit", "sources", "categories")
     class Near(_message.Message):
         __slots__ = ("center", "radius_meters")
         CENTER_FIELD_NUMBER: _ClassVar[int]
@@ -117,13 +151,15 @@ class SearchPoisRequest(_message.Message):
     VISIBLE_ONLY_FIELD_NUMBER: _ClassVar[int]
     LIMIT_FIELD_NUMBER: _ClassVar[int]
     SOURCES_FIELD_NUMBER: _ClassVar[int]
+    CATEGORIES_FIELD_NUMBER: _ClassVar[int]
     near: SearchPoisRequest.Near
     bounding_box: _common_pb2.BoundingBox
     name_contains: str
     visible_only: bool
     limit: int
     sources: _containers.RepeatedScalarFieldContainer[PoiSource]
-    def __init__(self, near: _Optional[_Union[SearchPoisRequest.Near, _Mapping]] = ..., bounding_box: _Optional[_Union[_common_pb2.BoundingBox, _Mapping]] = ..., name_contains: _Optional[str] = ..., visible_only: bool = ..., limit: _Optional[int] = ..., sources: _Optional[_Iterable[_Union[PoiSource, str]]] = ...) -> None: ...
+    categories: _containers.RepeatedScalarFieldContainer[PoiCategory]
+    def __init__(self, near: _Optional[_Union[SearchPoisRequest.Near, _Mapping]] = ..., bounding_box: _Optional[_Union[_common_pb2.BoundingBox, _Mapping]] = ..., name_contains: _Optional[str] = ..., visible_only: bool = ..., limit: _Optional[int] = ..., sources: _Optional[_Iterable[_Union[PoiSource, str]]] = ..., categories: _Optional[_Iterable[_Union[PoiCategory, str]]] = ...) -> None: ...
 
 class SearchPoisResponse(_message.Message):
     __slots__ = ("results",)

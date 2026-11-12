@@ -18,7 +18,7 @@ from google.protobuf import field_mask_pb2 as google_dot_protobuf_dot_field__mas
 from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19\x65\x33\x39maps_api/v1/pois.proto\x12\ne39maps.v1\x1a\x1b\x65\x33\x39maps_api/v1/common.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8c\x02\n\x07PoiIcon\x12*\n\x04none\x18\x01 \x01(\x0b\x32\x1a.e39maps.v1.PoiIcon.NoIconH\x00\x12;\n\x0e\x63olored_circle\x18\x02 \x01(\x0b\x32!.e39maps.v1.PoiIcon.ColoredCircleH\x00\x12\x32\n\x07\x62undled\x18\x03 \x01(\x0b\x32\x1f.e39maps.v1.PoiIcon.BundledIconH\x00\x1a\x08\n\x06NoIcon\x1a\x1d\n\rColoredCircle\x12\x0c\n\x04\x61rgb\x18\x01 \x01(\r\x1a\x33\n\x0b\x42undledIcon\x12\x11\n\tfile_name\x18\x01 \x01(\t\x12\x11\n\ttint_argb\x18\x02 \x01(\rB\x06\n\x04kind\"\xfa\x01\n\x03Poi\x12\n\n\x02id\x18\x01 \x01(\x03\x12\x0c\n\x04name\x18\x02 \x01(\t\x12$\n\x08location\x18\x03 \x01(\x0b\x32\x12.e39maps.v1.LatLng\x12!\n\x04icon\x18\x04 \x01(\x0b\x32\x13.e39maps.v1.PoiIcon\x12\x0f\n\x07visible\x18\x05 \x01(\x08\x12%\n\x06source\x18\x06 \x01(\x0e\x32\x15.e39maps.v1.PoiSource\x12+\n\x07\x63reated\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12+\n\x07updated\x18\x08 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\"\'\n\x0fListPoisRequest\x12\x14\n\x0cvisible_only\x18\x01 \x01(\x08\"1\n\x10ListPoisResponse\x12\x1d\n\x04pois\x18\x01 \x03(\x0b\x32\x0f.e39maps.v1.Poi\"\x1b\n\rGetPoiRequest\x12\n\n\x02id\x18\x01 \x01(\x03\"0\n\x10\x43reatePoiRequest\x12\x1c\n\x03poi\x18\x01 \x01(\x0b\x32\x0f.e39maps.v1.Poi\"a\n\x10UpdatePoiRequest\x12\x1c\n\x03poi\x18\x01 \x01(\x0b\x32\x0f.e39maps.v1.Poi\x12/\n\x0bupdate_mask\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.FieldMask\"\x1e\n\x10\x44\x65letePoiRequest\x12\n\n\x02id\x18\x01 \x01(\x03\"\xa7\x02\n\x11SearchPoisRequest\x12\x32\n\x04near\x18\x01 \x01(\x0b\x32\".e39maps.v1.SearchPoisRequest.NearH\x00\x12/\n\x0c\x62ounding_box\x18\x02 \x01(\x0b\x32\x17.e39maps.v1.BoundingBoxH\x00\x12\x15\n\rname_contains\x18\x03 \x01(\t\x12\x14\n\x0cvisible_only\x18\x04 \x01(\x08\x12\r\n\x05limit\x18\x05 \x01(\x05\x12&\n\x07sources\x18\x06 \x03(\x0e\x32\x15.e39maps.v1.PoiSource\x1a\x41\n\x04Near\x12\"\n\x06\x63\x65nter\x18\x01 \x01(\x0b\x32\x12.e39maps.v1.LatLng\x12\x15\n\rradius_meters\x18\x02 \x01(\x01\x42\x06\n\x04\x61rea\"<\n\x12SearchPoisResponse\x12&\n\x07results\x18\x01 \x03(\x0b\x32\x15.e39maps.v1.PoiResult\"B\n\tPoiResult\x12\x1c\n\x03poi\x18\x01 \x01(\x0b\x32\x0f.e39maps.v1.Poi\x12\x17\n\x0f\x64istance_meters\x18\x02 \x01(\x01*P\n\tPoiSource\x12\x1a\n\x16POI_SOURCE_UNSPECIFIED\x10\x00\x12\x13\n\x0fPOI_SOURCE_USER\x10\x01\x12\x12\n\x0ePOI_SOURCE_MAP\x10\x02\x32\x91\x03\n\nPoiService\x12\x45\n\x08ListPois\x12\x1b.e39maps.v1.ListPoisRequest\x1a\x1c.e39maps.v1.ListPoisResponse\x12\x34\n\x06GetPoi\x12\x19.e39maps.v1.GetPoiRequest\x1a\x0f.e39maps.v1.Poi\x12:\n\tCreatePoi\x12\x1c.e39maps.v1.CreatePoiRequest\x1a\x0f.e39maps.v1.Poi\x12:\n\tUpdatePoi\x12\x1c.e39maps.v1.UpdatePoiRequest\x1a\x0f.e39maps.v1.Poi\x12\x41\n\tDeletePoi\x12\x1c.e39maps.v1.DeletePoiRequest\x1a\x16.google.protobuf.Empty\x12K\n\nSearchPois\x12\x1d.e39maps.v1.SearchPoisRequest\x1a\x1e.e39maps.v1.SearchPoisResponseB\x19\n\x15\x63\x61.stefanm.e39maps.v1P\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19\x65\x33\x39maps_api/v1/pois.proto\x12\ne39maps.v1\x1a\x1b\x65\x33\x39maps_api/v1/common.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8c\x02\n\x07PoiIcon\x12*\n\x04none\x18\x01 \x01(\x0b\x32\x1a.e39maps.v1.PoiIcon.NoIconH\x00\x12;\n\x0e\x63olored_circle\x18\x02 \x01(\x0b\x32!.e39maps.v1.PoiIcon.ColoredCircleH\x00\x12\x32\n\x07\x62undled\x18\x03 \x01(\x0b\x32\x1f.e39maps.v1.PoiIcon.BundledIconH\x00\x1a\x08\n\x06NoIcon\x1a\x1d\n\rColoredCircle\x12\x0c\n\x04\x61rgb\x18\x01 \x01(\r\x1a\x33\n\x0b\x42undledIcon\x12\x11\n\tfile_name\x18\x01 \x01(\t\x12\x11\n\ttint_argb\x18\x02 \x01(\rB\x06\n\x04kind\"\x84\x03\n\x03Poi\x12\n\n\x02id\x18\x01 \x01(\x03\x12\x0c\n\x04name\x18\x02 \x01(\t\x12$\n\x08location\x18\x03 \x01(\x0b\x32\x12.e39maps.v1.LatLng\x12!\n\x04icon\x18\x04 \x01(\x0b\x32\x13.e39maps.v1.PoiIcon\x12\x0f\n\x07visible\x18\x05 \x01(\x08\x12%\n\x06source\x18\x06 \x01(\x0e\x32\x15.e39maps.v1.PoiSource\x12+\n\x07\x63reated\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12+\n\x07updated\x18\x08 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12)\n\x08\x63\x61tegory\x18\t \x01(\x0e\x32\x17.e39maps.v1.PoiCategory\x12-\n\x07\x64\x65tails\x18\n \x03(\x0b\x32\x1c.e39maps.v1.Poi.DetailsEntry\x1a.\n\x0c\x44\x65tailsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\'\n\x0fListPoisRequest\x12\x14\n\x0cvisible_only\x18\x01 \x01(\x08\"1\n\x10ListPoisResponse\x12\x1d\n\x04pois\x18\x01 \x03(\x0b\x32\x0f.e39maps.v1.Poi\"\x1b\n\rGetPoiRequest\x12\n\n\x02id\x18\x01 \x01(\x03\"0\n\x10\x43reatePoiRequest\x12\x1c\n\x03poi\x18\x01 \x01(\x0b\x32\x0f.e39maps.v1.Poi\"a\n\x10UpdatePoiRequest\x12\x1c\n\x03poi\x18\x01 \x01(\x0b\x32\x0f.e39maps.v1.Poi\x12/\n\x0bupdate_mask\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.FieldMask\"\x1e\n\x10\x44\x65letePoiRequest\x12\n\n\x02id\x18\x01 \x01(\x03\"\xd4\x02\n\x11SearchPoisRequest\x12\x32\n\x04near\x18\x01 \x01(\x0b\x32\".e39maps.v1.SearchPoisRequest.NearH\x00\x12/\n\x0c\x62ounding_box\x18\x02 \x01(\x0b\x32\x17.e39maps.v1.BoundingBoxH\x00\x12\x15\n\rname_contains\x18\x03 \x01(\t\x12\x14\n\x0cvisible_only\x18\x04 \x01(\x08\x12\r\n\x05limit\x18\x05 \x01(\x05\x12&\n\x07sources\x18\x06 \x03(\x0e\x32\x15.e39maps.v1.PoiSource\x12+\n\ncategories\x18\x07 \x03(\x0e\x32\x17.e39maps.v1.PoiCategory\x1a\x41\n\x04Near\x12\"\n\x06\x63\x65nter\x18\x01 \x01(\x0b\x32\x12.e39maps.v1.LatLng\x12\x15\n\rradius_meters\x18\x02 \x01(\x01\x42\x06\n\x04\x61rea\"<\n\x12SearchPoisResponse\x12&\n\x07results\x18\x01 \x03(\x0b\x32\x15.e39maps.v1.PoiResult\"B\n\tPoiResult\x12\x1c\n\x03poi\x18\x01 \x01(\x0b\x32\x0f.e39maps.v1.Poi\x12\x17\n\x0f\x64istance_meters\x18\x02 \x01(\x01*P\n\tPoiSource\x12\x1a\n\x16POI_SOURCE_UNSPECIFIED\x10\x00\x12\x13\n\x0fPOI_SOURCE_USER\x10\x01\x12\x12\n\x0ePOI_SOURCE_MAP\x10\x02*\x97\x02\n\x0bPoiCategory\x12\x1c\n\x18POI_CATEGORY_UNSPECIFIED\x10\x00\x12\x15\n\x11POI_CATEGORY_FUEL\x10\x01\x12\x1b\n\x17POI_CATEGORY_RESTAURANT\x10\x02\x12\x19\n\x15POI_CATEGORY_SKI_AREA\x10\x03\x12\x17\n\x13POI_CATEGORY_MUSEUM\x10\x04\x12\x18\n\x14POI_CATEGORY_AIRPORT\x10\x05\x12\x15\n\x11POI_CATEGORY_PARK\x10\x06\x12\x1a\n\x16POI_CATEGORY_TRAILHEAD\x10\x07\x12\x1a\n\x16POI_CATEGORY_CAR_PARTS\x10\x08\x12\x19\n\x15POI_CATEGORY_JUNKYARD\x10\t2\x91\x03\n\nPoiService\x12\x45\n\x08ListPois\x12\x1b.e39maps.v1.ListPoisRequest\x1a\x1c.e39maps.v1.ListPoisResponse\x12\x34\n\x06GetPoi\x12\x19.e39maps.v1.GetPoiRequest\x1a\x0f.e39maps.v1.Poi\x12:\n\tCreatePoi\x12\x1c.e39maps.v1.CreatePoiRequest\x1a\x0f.e39maps.v1.Poi\x12:\n\tUpdatePoi\x12\x1c.e39maps.v1.UpdatePoiRequest\x1a\x0f.e39maps.v1.Poi\x12\x41\n\tDeletePoi\x12\x1c.e39maps.v1.DeletePoiRequest\x1a\x16.google.protobuf.Empty\x12K\n\nSearchPois\x12\x1d.e39maps.v1.SearchPoisRequest\x1a\x1e.e39maps.v1.SearchPoisResponseB\x19\n\x15\x63\x61.stefanm.e39maps.v1P\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -26,8 +26,12 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'e39maps_api.v1.pois_pb2', _
 if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['DESCRIPTOR']._options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\025ca.stefanm.e39maps.v1P\001'
-  _globals['_POISOURCE']._serialized_start=1420
-  _globals['_POISOURCE']._serialized_end=1500
+  _globals['_POI_DETAILSENTRY']._options = None
+  _globals['_POI_DETAILSENTRY']._serialized_options = b'8\001'
+  _globals['_POISOURCE']._serialized_start=1603
+  _globals['_POISOURCE']._serialized_end=1683
+  _globals['_POICATEGORY']._serialized_start=1686
+  _globals['_POICATEGORY']._serialized_end=1965
   _globals['_POIICON']._serialized_start=167
   _globals['_POIICON']._serialized_end=435
   _globals['_POIICON_NOICON']._serialized_start=335
@@ -37,27 +41,29 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['_POIICON_BUNDLEDICON']._serialized_start=376
   _globals['_POIICON_BUNDLEDICON']._serialized_end=427
   _globals['_POI']._serialized_start=438
-  _globals['_POI']._serialized_end=688
-  _globals['_LISTPOISREQUEST']._serialized_start=690
-  _globals['_LISTPOISREQUEST']._serialized_end=729
-  _globals['_LISTPOISRESPONSE']._serialized_start=731
-  _globals['_LISTPOISRESPONSE']._serialized_end=780
-  _globals['_GETPOIREQUEST']._serialized_start=782
-  _globals['_GETPOIREQUEST']._serialized_end=809
-  _globals['_CREATEPOIREQUEST']._serialized_start=811
-  _globals['_CREATEPOIREQUEST']._serialized_end=859
-  _globals['_UPDATEPOIREQUEST']._serialized_start=861
-  _globals['_UPDATEPOIREQUEST']._serialized_end=958
-  _globals['_DELETEPOIREQUEST']._serialized_start=960
-  _globals['_DELETEPOIREQUEST']._serialized_end=990
-  _globals['_SEARCHPOISREQUEST']._serialized_start=993
-  _globals['_SEARCHPOISREQUEST']._serialized_end=1288
-  _globals['_SEARCHPOISREQUEST_NEAR']._serialized_start=1215
-  _globals['_SEARCHPOISREQUEST_NEAR']._serialized_end=1280
-  _globals['_SEARCHPOISRESPONSE']._serialized_start=1290
-  _globals['_SEARCHPOISRESPONSE']._serialized_end=1350
-  _globals['_POIRESULT']._serialized_start=1352
-  _globals['_POIRESULT']._serialized_end=1418
-  _globals['_POISERVICE']._serialized_start=1503
-  _globals['_POISERVICE']._serialized_end=1904
+  _globals['_POI']._serialized_end=826
+  _globals['_POI_DETAILSENTRY']._serialized_start=780
+  _globals['_POI_DETAILSENTRY']._serialized_end=826
+  _globals['_LISTPOISREQUEST']._serialized_start=828
+  _globals['_LISTPOISREQUEST']._serialized_end=867
+  _globals['_LISTPOISRESPONSE']._serialized_start=869
+  _globals['_LISTPOISRESPONSE']._serialized_end=918
+  _globals['_GETPOIREQUEST']._serialized_start=920
+  _globals['_GETPOIREQUEST']._serialized_end=947
+  _globals['_CREATEPOIREQUEST']._serialized_start=949
+  _globals['_CREATEPOIREQUEST']._serialized_end=997
+  _globals['_UPDATEPOIREQUEST']._serialized_start=999
+  _globals['_UPDATEPOIREQUEST']._serialized_end=1096
+  _globals['_DELETEPOIREQUEST']._serialized_start=1098
+  _globals['_DELETEPOIREQUEST']._serialized_end=1128
+  _globals['_SEARCHPOISREQUEST']._serialized_start=1131
+  _globals['_SEARCHPOISREQUEST']._serialized_end=1471
+  _globals['_SEARCHPOISREQUEST_NEAR']._serialized_start=1398
+  _globals['_SEARCHPOISREQUEST_NEAR']._serialized_end=1463
+  _globals['_SEARCHPOISRESPONSE']._serialized_start=1473
+  _globals['_SEARCHPOISRESPONSE']._serialized_end=1533
+  _globals['_POIRESULT']._serialized_start=1535
+  _globals['_POIRESULT']._serialized_end=1601
+  _globals['_POISERVICE']._serialized_start=1968
+  _globals['_POISERVICE']._serialized_end=2369
 # @@protoc_insertion_point(module_scope)

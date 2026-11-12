@@ -1,8 +1,11 @@
 """Conversion between the gRPC messages (e39maps_api.v1) and Django models."""
 
+import json
+
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from e39maps_api.v1 import common_pb2, pois_pb2
+from mapdata.models import MapPoi
 from pois.models import Poi
 
 
@@ -32,6 +35,36 @@ def poi_to_pb(poi: Poi) -> pois_pb2.Poi:
         created=_timestamp(poi.created),
         updated=_timestamp(poi.updated),
     )
+
+
+def category_to_pb(key):
+    """mapdata.schema.CATEGORIES key ("ski_area") -> PoiCategory value."""
+    try:
+        return pois_pb2.PoiCategory.Value(f"POI_CATEGORY_{key.upper()}")
+    except ValueError:
+        return pois_pb2.POI_CATEGORY_UNSPECIFIED
+
+
+def category_from_pb(value):
+    return pois_pb2.PoiCategory.Name(value).removeprefix("POI_CATEGORY_").lower()
+
+
+def map_poi_to_pb(poi: MapPoi) -> pois_pb2.Poi:
+    try:
+        details = {k: str(v) for k, v in json.loads(poi.details or "{}").items()}
+    except ValueError:
+        details = {}
+    msg = pois_pb2.Poi(
+        id=poi.id,
+        name=poi.name,
+        location=common_pb2.LatLng(latitude=poi.latitude, longitude=poi.longitude),
+        visible=True,
+        source=pois_pb2.POI_SOURCE_MAP,
+        category=category_to_pb(poi.category),
+        details=details,
+    )
+    msg.icon.none.SetInParent()
+    return msg
 
 
 # Fields of Poi a client may set (CreatePoi, UpdatePoi's update_mask).

@@ -157,7 +157,7 @@ class PoiSearchTests(GrpcTestCase):
         self.assertEqual(len(self.search(limit=2)), 2)
         self.assertStatus(grpc.StatusCode.INVALID_ARGUMENT, self.pois.SearchPois,
                           pois_pb2.SearchPoisRequest(limit=-1))
-        # Map POIs don't exist yet in v1.
+        # No map database in these tests: no map POIs, and no error.
         self.assertEqual(len(self.search(sources=[pois_pb2.POI_SOURCE_MAP])), 0)
 
     def test_near_needs_a_positive_radius(self):
@@ -171,3 +171,78 @@ class RouteTests(GrpcTestCase):
         err = self.assertStatus(grpc.StatusCode.UNIMPLEMENTED, self.routes.ComputeRoute,
                                 routes_pb2.ComputeRouteRequest(origin=latlng(45, -75), destination=latlng(46, -75)))
         self.assertIn("Valhalla", err.details())
+
+
+class MapPoiSearchTests(GrpcTestCase):
+    """SearchPois with source MAP: POIs from the read-only map database."""
+
+    databases = {"default", "mapdata"}
+
+    def setUp(self):
+        super().setUp()
+        from django.db import connections
+
+        from mapdata import schema
+
+        ddl = (schema.SCHEMA.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
+               .replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS "))
+        with connections["mapdata"].cursor() as c:
+            for statement in filter(str.strip, ddl.split(";")):
+                c.execute(statement)
+            c.execute("DELETE FROM map_poi")
+            c.executemany("INSERT INTO map_poi VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", [
+                (schema.poi_id("node", 1), "node", 1, "fuel", "Esso Bank St", 45.4240, -75.7000,
+                 '{"kind": "amenity=fuel", "brand": "Esso"}'),
+                (schema.poi_id("way", 2), "way", 2, "museum", "Bytown Museum", 45.4260, -75.6970,
+                 '{"kind": "tourism=museum"}'),
+                (schema.poi_id("node", 3), "node", 3, "fuel", "Far Fuel", 43.65, -79.38, "{}"),
+            ])
+        Poi.objects.create(name="Parliament", latitude=45.4236, longitude=-75.7009)
+
+    def tearDown(self):
+        # The map database isn't flushed between tests (Django doesn't manage
+        # it): drop the table so other tests see no map data.
+        from django.db import connections
+
+        with connections["mapdata"].cursor() as c:
+            c.execute("DROP TABLE IF EXISTS map_poi")
+        super().tearDown()
+
+    def search(self, **kwargs):
+        return self.pois.SearchPois(pois_pb2.SearchPoisRequest(**kwargs)).results
+
+    def test_near_merges_user_and_map_pois_by_distance(self):
+        near = pois_pb2.SearchPoisRequest.Near(center=latlng(45.4236, -75.7009), radius_meters=2000)
+        results = self.search(near=near, sources=[pois_pb2.POI_SOURCE_USER, pois_pb2.POI_SOURCE_MAP])
+        self.assertEqual([r.poi.name for r in results], ["Parliament", "Esso Bank St", "Bytown Museum"])
+        esso = results[1].poi
+        self.assertEqual(esso.source, pois_pb2.POI_SOURCE_MAP)
+        self.assertEqual(esso.category, pois_pb2.POI_CATEGORY_FUEL)
+        self.assertEqual(dict(esso.details), {"kind": "amenity=fuel", "brand": "Esso"})
+        self.assertEqual(esso.id, 1 * 4 + 1)
+        self.assertEqual(results[0].poi.category, pois_pb2.POI_CATEGORY_UNSPECIFIED)
+
+    def test_default_sources_stay_user_only(self):
+        self.assertEqual([r.poi.name for r in self.search()], ["Parliament"])
+
+    def test_categories_filter_map_pois_and_exclude_user_pois(self):
+        results = self.search(sources=[pois_pb2.POI_SOURCE_USER, pois_pb2.POI_SOURCE_MAP],
+                              categories=[pois_pb2.POI_CATEGORY_FUEL])
+        self.assertEqual([r.poi.name for r in results], ["Esso Bank St", "Far Fuel"])
+
+    def test_bounding_box_and_name_across_sources_by_name(self):
+        box = common_pb2.BoundingBox(south_west=latlng(45.0, -76.0), north_east=latlng(46.0, -75.0))
+        both = [pois_pb2.POI_SOURCE_USER, pois_pb2.POI_SOURCE_MAP]
+        self.assertEqual([r.poi.name for r in self.search(bounding_box=box, sources=both)],
+                         ["Bytown Museum", "Esso Bank St", "Parliament"])
+        self.assertEqual([r.poi.name for r in self.search(name_contains="MUSEUM", sources=both)],
+                         ["Bytown Museum"])
+        self.assertEqual(len(self.search(sources=both, limit=2)), 2)
+
+    def test_missing_map_database_gives_user_pois_only(self):
+        from django.db import connections
+
+        with connections["mapdata"].cursor() as c:
+            c.execute("DROP TABLE map_poi")
+        results = self.search(sources=[pois_pb2.POI_SOURCE_USER, pois_pb2.POI_SOURCE_MAP])
+        self.assertEqual([r.poi.name for r in results], ["Parliament"])

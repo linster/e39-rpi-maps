@@ -32,6 +32,7 @@ packages in Yocto; a newly imported one may need adding too.
 | Management | `python3 manage.py migrate --noinput`, `collectstatic --noinput --clear`, `run_grpc_server` (runs until SIGTERM) |
 | Settings | environment variables only (below) |
 | Map data | `output/db/e39maps-osm.sqlite` (Git LFS) + `output/db/ATTRIBUTION.txt` |
+| Map database format | `src/mapdata/schema.py`: importable **without Django** (the device's `e39maps-mapdb` and the toolkit import it); `schema.check(path)` validates a file |
 
 Environment on the device (`/etc/default/e39maps`):
 
@@ -62,6 +63,11 @@ Environment on the device (`/etc/default/e39maps`):
 - **Map data** is a separate package (`e39maps-data`, ODbL). A map update
   replaces only that file; the state database keeps users and user POIs.
   Data over 2 GB: build machine path (`E39_MAPS_DATA_DIR`) instead of LFS.
+- **Map updates on a running device**: `/usr/libexec/e39maps-mapdb install
+  [--move] <file>` (checks with `mapdata.schema`, stops `e39maps` and
+  `e39maps-grpc`, swaps the file, starts them), used by the toolkit's live
+  swap over ssh and by `e39maps-usb-import@.service` (USB stick with an
+  `RPIMAPS` folder, started by the automount hook).
 
 ## Rules
 
@@ -74,6 +80,5 @@ Environment on the device (`/etc/default/e39maps`):
 ## Still to come
 
 Valhalla (Python bindings, routing tiles from the toolkit; then
-`RouteService`); pre-rendered tiles over HTTP; the
-map toolkit (build, push to QEMU/device over ssh); the map database timestamp
-in the HMI's `version.conf`.
+`RouteService`); pre-rendered tiles over HTTP; the map database timestamp in
+the HMI's `version.conf`.

@@ -1,0 +1,178 @@
+"""Build the map database from OpenStreetMap extracts.
+
+Reads each extract once with pyosmium: tag filtering, node locations and
+area assembly (closed ways, multipolygon relations) happen in C++, so only
+matching objects reach Python. Nodes become POIs at their location, areas
+at the centroid of their largest outer ring. POIs outside the region's
+circle are dropped; objects in several extracts (provinces overlap a little
+at their borders) are stored once.
+"""
+
+import json
+import math
+import os
+import sqlite3
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+import osmium
+from osmium.filter import TagFilter
+
+from mapdata import schema
+
+from . import categories as cats
+
+EARTH_RADIUS_KM = 6371.0088
+
+
+def distance_km(lat1, lon1, lat2, lon2):
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(a))
+
+
+@dataclass
+class Region:
+    name: str
+    center_lat: float
+    center_lon: float
+    radius_km: float
+    extracts: list = field(default_factory=list)
+
+    def contains(self, lat, lon):
+        return distance_km(self.center_lat, self.center_lon, lat, lon) <= self.radius_km
+
+
+def ring_centroid(ring):
+    """Area-weighted centroid of a closed ring of (lat, lon), planar (fine
+    for placing a POI). Returns (abs area, lat, lon)."""
+    a = cx = cy = 0.0
+    for (y0, x0), (y1, x1) in zip(ring, ring[1:]):
+        cross = x0 * y1 - x1 * y0
+        a += cross
+        cx += (x0 + x1) * cross
+        cy += (y0 + y1) * cross
+    if abs(a) < 1e-15:      # degenerate: average of the points
+        lat = sum(p[0] for p in ring) / len(ring)
+        lon = sum(p[1] for p in ring) / len(ring)
+        return 0.0, lat, lon
+    return abs(a / 2), cy / (3 * a), cx / (3 * a)
+
+
+def area_point(area):
+    best = None
+    for ring in area.outer_rings():
+        points = [(n.lat, n.lon) for n in ring if n.location.valid()]
+        if len(points) < 3:
+            continue
+        candidate = ring_centroid(points)
+        if best is None or candidate[0] > best[0]:
+            best = candidate
+    return None if best is None else best[1:]
+
+
+def extract_timestamp(path):
+    header = osmium.io.Reader(str(path), osmium.osm.osm_entity_bits.NOTHING).header()
+    return header.get("osmosis_replication_timestamp") or header.get("timestamp") or ""
+
+
+def build(region, categories, out_path, extract_paths, log=print, progress=None,
+          cancelled=lambda: False, toolkit_version=""):
+    """Write the map database to out_path (replaced atomically). Returns
+    the facts written to e39maps_meta."""
+    categories = [c for c in schema.CATEGORIES if c in set(categories)]
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_name(f".{out_path.name}.building")
+    tmp.unlink(missing_ok=True)
+
+    conn = sqlite3.connect(tmp)
+    schema.create(conn)
+    tag_filter = TagFilter(*cats.tag_pairs(categories))
+    counts = {c: 0 for c in categories}
+    sources = []
+    started = time.monotonic()
+
+    for path in extract_paths:
+        path = Path(path)
+        log(f"Reading {path.name} ({path.stat().st_size / 1e6:.0f} MB)...")
+        sources.append({"file": path.name, "osm_timestamp": extract_timestamp(path)})
+        found = kept = 0
+        rows = []
+        processor = osmium.FileProcessor(str(path)).with_areas(tag_filter).with_filter(tag_filter)
+        for obj in processor:
+            if cancelled():
+                conn.close()
+                tmp.unlink(missing_ok=True)
+                raise InterruptedError("cancelled")
+            if obj.is_node():
+                osm_type, osm_id = "node", obj.id
+                if not obj.location.valid():
+                    continue
+                point = (obj.location.lat, obj.location.lon)
+            elif obj.is_area():
+                osm_type = "way" if obj.from_way() else "relation"
+                osm_id = obj.orig_id()
+                point = area_point(obj)
+                if point is None:
+                    continue
+            else:
+                continue        # ways/relations: their areas come separately
+            tags = {t.k: t.v for t in obj.tags}
+            match = cats.classify(tags, categories)
+            if match is None:
+                continue
+            found += 1
+            category, kind = match
+            name = cats.poi_name(tags, category, schema.CATEGORIES)
+            if name is None or not region.contains(*point):
+                continue
+            details = {"kind": kind, **{k: tags[k] for k in cats.DETAIL_KEYS if k in tags}}
+            rows.append((schema.poi_id(osm_type, osm_id), osm_type, osm_id, category, name,
+                         round(point[0], 7), round(point[1], 7), json.dumps(details, ensure_ascii=False)))
+            kept += 1
+            if len(rows) >= 5000:
+                conn.executemany("INSERT OR IGNORE INTO map_poi VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+                rows.clear()
+                if progress:
+                    progress(path.name, kept)
+        conn.executemany("INSERT OR IGNORE INTO map_poi VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        conn.commit()
+        log(f"  {path.name}: {found} matching objects, {kept} named and inside the region "
+            f"({time.monotonic() - started:.0f} s so far)")
+
+    for category, count in conn.execute("SELECT category, count(*) FROM map_poi GROUP BY category"):
+        counts[category] = count
+    total = sum(counts.values())
+    meta = {
+        "schema_version": str(schema.SCHEMA_VERSION),
+        "built_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "region": region.name,
+        "center": f"{region.center_lat},{region.center_lon}",
+        "radius_km": f"{region.radius_km:g}",
+        "extracts": json.dumps([{"id": e, **s} for e, s in zip(region.extracts, sources)]
+                               if len(region.extracts) == len(sources) else sources),
+        "categories": json.dumps(counts),
+        "poi_count": str(total),
+        "toolkit_version": toolkit_version,
+        "attribution": "Map data (c) OpenStreetMap contributors, ODbL 1.0. "
+                       "https://www.openstreetmap.org/copyright",
+    }
+    conn.executemany("INSERT INTO e39maps_meta VALUES (?, ?)", meta.items())
+    conn.commit()
+    # Read-only on the device (opened immutable): no WAL, compact, with
+    # statistics for the query planner.
+    conn.execute("ANALYZE")
+    conn.execute("PRAGMA journal_mode = DELETE")
+    conn.execute("VACUUM")
+    conn.close()
+    schema.check(tmp)
+    os.replace(tmp, out_path)
+    log(f"Wrote {out_path} ({out_path.stat().st_size / 1e6:.1f} MB): {total} POIs "
+        f"in {time.monotonic() - started:.0f} s")
+    for category, count in counts.items():
+        log(f"  {schema.CATEGORIES[category]}: {count}")
+    return meta
