@@ -71,6 +71,16 @@ file in a shared directory). Inside the container the routing tiles are
 copied beside the database rather than hard-linked from the cache
 (different mounts), so they take 625 MB more disk.
 
+- **Region** (tab 1): an OpenStreetMap map with the circle on it: click to
+  move the centre, the slider or box for the radius, "Find" for a place
+  name (Nominatim). Next to it, a checklist of Geofabrik's extracts the
+  circle overlaps (from Geofabrik's index of extracts and their outlines,
+  cached for a week), with download sizes; ticked ones are outlined on the
+  map. "Suggested" marks the smallest set covering the circle: each point of
+  the circle goes to the smallest extract containing it, so Ontario rather
+  than Canada, New York rather than "US Northeast". Ticks stay when the
+  circle moves (leave out the US for a Canada-only map); "Tick suggested"
+  applies the suggestion; the search box finds any other extract.
 - **Build map database**: downloads the OpenStreetMap extracts of the region
   from Geofabrik (cached in `~/.cache/e39maps-toolkit/extracts`, refreshed
   when Geofabrik has newer ones, MD5-checked), keeps the POIs of the chosen

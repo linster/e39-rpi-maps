@@ -26,25 +26,41 @@ class ToolkitWindow:
         self.busy = False
         self.cancel_requested = threading.Event()
         root.title("e39-rpi map toolkit")
-        root.minsize(760, 640)
+        root.minsize(1000, 760)
         root.protocol("WM_DELETE_WINDOW", self.close)
 
         main = ttk.Frame(root, padding=8)
         main.pack(fill="both", expand=True)
         main.columnconfigure(0, weight=1)
-        main.columnconfigure(1, weight=1)
+        main.rowconfigure(0, weight=1)
 
-        self._region_frame(main).grid(row=0, column=0, sticky="nsew", **PAD)
-        self._categories_frame(main).grid(row=0, column=1, sticky="nsew", **PAD)
-        self._build_frame(main).grid(row=1, column=0, columnspan=2, sticky="nsew", **PAD)
-        self._push_frame(main).grid(row=2, column=0, sticky="nsew", **PAD)
-        self._image_frame(main).grid(row=2, column=1, sticky="nsew", **PAD)
-        self._release_frame(main).grid(row=3, column=0, columnspan=2, sticky="nsew", **PAD)
+        # Two tabs: what the map covers, and building/delivering it. The log
+        # stays visible under both.
+        tabs = ttk.Notebook(main)
+        tabs.grid(row=0, column=0, sticky="nsew")
+        region_tab = ttk.Frame(tabs, padding=4)
+        build_tab = ttk.Frame(tabs, padding=4)
+        tabs.add(region_tab, text="1. Region and POIs")
+        tabs.add(build_tab, text="2. Build and deliver")
+
+        from .regionpicker import RegionPicker
+
+        region_tab.columnconfigure(0, weight=1)
+        region_tab.rowconfigure(0, weight=1)
+        self.picker = RegionPicker(region_tab, self.settings.region, self.settings.cache_dir, self.log)
+        self.picker.grid(row=0, column=0, sticky="nsew", **PAD)
+        self._categories_frame(region_tab).grid(row=1, column=0, sticky="ew", **PAD)
+
+        build_tab.columnconfigure(0, weight=1)
+        build_tab.columnconfigure(1, weight=1)
+        self._build_frame(build_tab).grid(row=0, column=0, columnspan=2, sticky="nsew", **PAD)
+        self._push_frame(build_tab).grid(row=1, column=0, sticky="nsew", **PAD)
+        self._image_frame(build_tab).grid(row=1, column=1, sticky="nsew", **PAD)
+        self._release_frame(build_tab).grid(row=2, column=0, columnspan=2, sticky="nsew", **PAD)
 
         logf = ttk.LabelFrame(main, text="Log")
-        logf.grid(row=4, column=0, columnspan=2, sticky="nsew", **PAD)
-        main.rowconfigure(4, weight=1)
-        self.log_text = tk.Text(logf, height=12, wrap="word", state="disabled", font="TkFixedFont")
+        logf.grid(row=1, column=0, sticky="nsew", **PAD)
+        self.log_text = tk.Text(logf, height=8, wrap="word", state="disabled", font="TkFixedFont")
         scroll = ttk.Scrollbar(logf, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scroll.set)
         self.log_text.pack(side="left", fill="both", expand=True)
@@ -62,25 +78,12 @@ class ToolkitWindow:
         ttk.Entry(parent, textvariable=var, width=width).grid(row=row, column=column + 1, sticky="ew", **PAD)
         return var
 
-    def _region_frame(self, parent):
-        r = self.settings.region
-        f = ttk.LabelFrame(parent, text="Region (a circle)")
-        f.columnconfigure(1, weight=1)
-        self.region_name = self._entry(f, 0, "Name", r.name, 30)
-        self.center_lat = self._entry(f, 1, "Centre latitude", r.center_lat)
-        self.center_lon = self._entry(f, 2, "Centre longitude", r.center_lon)
-        self.radius = self._entry(f, 3, "Radius (km)", f"{r.radius_km:g}")
-        self.extracts = self._entry(f, 4, "Geofabrik extracts", ", ".join(r.extracts), 30)
-        ttk.Label(f, text="Default: Ottawa, reaching London ON and Quebec City; Canada only.",
-                  foreground="#666").grid(row=5, column=0, columnspan=2, sticky="w", **PAD)
-        return f
-
     def _categories_frame(self, parent):
         f = ttk.LabelFrame(parent, text="POI categories")
         self.category_vars = {}
         for i, (key, label) in enumerate(schema.CATEGORIES.items()):
             var = tk.BooleanVar(value=key in self.settings.categories)
-            ttk.Checkbutton(f, text=label, variable=var).grid(row=i % 5, column=i // 5, sticky="w", **PAD)
+            ttk.Checkbutton(f, text=label, variable=var).grid(row=i // 5, column=i % 5, sticky="w", **PAD)
             self.category_vars[key] = var
         return f
 
@@ -267,14 +270,7 @@ class ToolkitWindow:
 
     def collect(self):
         s = self.settings
-        try:
-            s.region.name = self.region_name.get().strip()
-            s.region.center_lat = float(self.center_lat.get())
-            s.region.center_lon = float(self.center_lon.get())
-            s.region.radius_km = float(self.radius.get())
-        except ValueError:
-            raise ValueError("Centre and radius must be numbers.")
-        s.region.extracts = [e.strip() for e in self.extracts.get().split(",") if e.strip()]
+        s.region = self.picker.get()
         s.categories = [k for k, v in self.category_vars.items() if v.get()]
         s.routing = self.routing.get()
         s.cache_dir = self.cache_dir.get().strip()
