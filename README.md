@@ -12,8 +12,9 @@ tuned for concurrent readers, WhiteNoise for static files).
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements/base.txt
+pip install -r src/requirements/base.txt
 
+cd src
 python manage.py migrate
 python manage.py runserver
 ```
@@ -32,14 +33,24 @@ python manage.py test
 ## Layout
 
 ```
-manage.py
-e39maps/            project package (settings, URLs, WSGI/ASGI entry points)
-core/               hello-world app (view, template, static CSS, tests)
-requirements/       base.txt (runtime), prod.txt (+ gunicorn)
-.env.example        configuration reference
+src/
+├── manage.py
+├── e39maps/        project package (settings, URLs, WSGI/ASGI entry points)
+├── core/           hello-world app (view, template, static CSS, tests)
+├── requirements/   base.txt (runtime), prod.txt (+ gunicorn)
+└── .env.example    configuration reference
+output/db/          pre-populated map database (Git LFS) + ODbL attribution
 ```
 
+The split matters for the Yocto build: the recipe installs `src/` as the
+application and ships `output/db/` as a separate `e39maps-data` package, so a
+large database does not rebuild the code (and vice versa).
+
 Future apps (`maps`, `routing`, `pois`, `api`) slot in next to `core`.
+
+The database in `output/db/` is stored with **Git LFS** (there is no artifact
+server); see [`output/db/README.md`](output/db/README.md). Run `git lfs install`
+once per machine and `git lfs pull` after cloning.
 
 ## Configuration
 
@@ -52,8 +63,8 @@ important ones:
 | `DJANGO_SECRET_KEY` | dev-only value | **Required** when `DJANGO_DEBUG=0`. |
 | `DJANGO_SECRET_KEY_FILE` | unset | Read the secret key from this file instead of the environment. |
 | `DJANGO_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` | Comma-separated. |
-| `DJANGO_DB_PATH` | `<project>/db.sqlite3` | Put writable state on persistent storage. |
-| `DJANGO_STATIC_ROOT` | `<project>/staticfiles` | Writable location for `collectstatic`. |
+| `DJANGO_DB_PATH` | `src/db.sqlite3` | Put writable state on persistent storage. |
+| `DJANGO_STATIC_ROOT` | `src/staticfiles` | Writable location for `collectstatic`. |
 | `DJANGO_HTTPS` | `0` | Set to `1` to enable HSTS and secure cookies. |
 
 `DJANGO_DEBUG=0` also enables WhiteNoise's compressed, hashed static storage,
@@ -62,10 +73,11 @@ so run `collectstatic` as part of the build/install step.
 ## Running in production (on the device)
 
 ```sh
-pip install -r requirements/prod.txt
+pip install -r src/requirements/prod.txt
 export DJANGO_DEBUG=0
 export DJANGO_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(50))')"
 export DJANGO_ALLOWED_HOSTS=e39.local
+cd src
 python manage.py migrate
 python manage.py collectstatic --noinput
 gunicorn e39maps.wsgi:application \
@@ -107,10 +119,10 @@ commit, so the image is reproducible; `externalsrc` also picks up uncommitted
 edits, which is intended for development only. `devtool modify e39maps` works
 for local iteration.
 
-The project does not need to become a PyPI package. A simple recipe copies the
-source tree to `${datadir}/e39rpi-maps` and depends on OE-provided Python
-packages. If we later want an installable wheel, add a `pyproject.toml` and
-use the PEP 517 / `python_setuptools_build_meta` classes.
+The project does not need to become a PyPI package. The recipe copies
+`src/{manage.py,e39maps,core}` to `${datadir}/e39rpi-maps` and depends on
+OE-provided Python packages. If we later want an installable wheel, add a
+`pyproject.toml` and use the PEP 517 / `python_setuptools_build_meta` classes.
 
 ### 2. Python dependencies: use OE recipes, not pip
 
@@ -175,8 +187,11 @@ Do the expensive work off-device:
   mode and put only the mutable admin/state DB in `/var/lib`. Avoid WAL churn
   on the SD card for data that never changes. (The first iteration can use one
   writable DB; see `Yocto_instructions.md` §8 for the split.)
-- Keep the prebuilt DB out of the git repo; publish it as a release artifact
-  or a separate BitBake `SRC_URI` with its own checksum.
+- Keep the prebuilt DB in `output/db/`, tracked by **Git LFS**. The data
+  recipe reads it from the submodule checkout, compresses it with host `zstd`,
+  and derives a content-hash `VERSION`, so a changed database is a package
+  upgrade. Build hosts need `git-lfs` and must smudge the submodule checkout
+  (`git lfs pull`); `externalsrc` does not fetch LFS objects itself.
 
 ### 5. gRPC
 
@@ -241,4 +256,4 @@ it's not the default.
 2. Add GeoDjango + SpatiaLite, a `places` model, admin registration.
 3. Import a regional OSM extract on the build host.
 4. Add the gRPC service for streaming POIs/routes.
-5. Write the BitBake recipe + systemd units and test on the Pi.
+5. Test the BitBake recipe + systemd units on the Pi.

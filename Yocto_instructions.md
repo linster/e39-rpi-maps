@@ -17,8 +17,9 @@ Yocto facts checked against `~/e39-rpi-yocto`:
 | Machines | `raspberrypi4-64` (SD/WIC), `qemuarm64`, `qemux86-64` |
 | Rootfs | ext4, **writable**, grown to fill the card on first boot by `e39rpi-growroot` |
 | Rootfs slack | `IMAGE_ROOTFS_EXTRA_SPACE = "524288"` (512 MiB) |
-| Maps layer | `layers/meta-e39rpi-maps`, collection `e39rpimaps`, currently empty |
+| Maps layer | `layers/meta-e39rpi-maps`, collection `e39rpimaps` |
 | Source convention | git submodule at the top of `e39-rpi-yocto` + `externalsrc` (same as `e39-rpi` HMI) |
+| Database storage | `output/db/` in this repo, tracked by **Git LFS** (no artifact server) |
 
 The rootfs is **not** read-only. The `/var/lib` split is still used for state
 that must survive package upgrades, but you do not need to design around a
@@ -35,15 +36,19 @@ read-only `/`.
   recipe unless the human asks for a standalone/release build.
 - Install the app to `/usr/share/e39rpi-maps`; keep writable state in
   `/var/lib/e39maps` (systemd `StateDirectory`).
-- Ship the pre-populated OSM database as a **separate `e39maps-data` package**
-  (compressed artifact + checksum), installed under
+- The database lives in `output/db/` in this repository, stored with **Git
+  LFS**. The data recipe reads it from the submodule checkout, compresses it
+  with host `zstd`, and derives a content-hash `VERSION`. There is no artifact
+  server.
+- Ship the database as a **separate `e39maps-data` package**, installed under
   `/usr/share/e39rpi-maps/data/`. A first-boot oneshot installs it into
   `/var/lib/e39maps/` (or opens it read-only in place).
 - Run Django as gunicorn on **port 8080** (8000 is MPD's HTTP stream).
 - Three systemd units: `e39maps-data.service` → `e39maps-init.service`
   (`migrate` + `collectstatic`) → `e39maps.service` (gunicorn).
 - Do not run `pip` or `osm2pgsql` on the device; `collectstatic` runs once on
-  first boot. The DB artifact is built on the x86 host.
+  first boot. The database is built on the x86 host and committed to
+  `output/db/` with Git LFS.
 
 ---
 
@@ -57,14 +62,15 @@ read-only `/`.
 | Python | Requires >= 3.10; tested on 3.12.3 |
 | Django | 5.2.19 LTS (supports Python 3.10–3.13) |
 | WSGI entry point | `e39maps.wsgi:application` |
-| Management entry | `manage.py` (run with cwd = project root) |
+| Management entry | `src/manage.py` (run with cwd = `src/`) |
 | Runtime deps | `Django`, `whitenoise`; production adds `gunicorn` |
 | Packaging | No `pyproject.toml`/`setup.py`; a Django *project*, not a wheel |
+| Repository layout | `src/` = app source; `output/db/` = database (Git LFS) |
 
 Runtime paths:
 
 ```
-/usr/share/e39rpi-maps/          app source (manage.py, e39maps/, core/)
+/usr/share/e39rpi-maps/          app source (manage.py, e39maps/, core/ from src/)
 /usr/share/e39rpi-maps/data/     read-only dataset + VERSION (e39maps-data)
 /var/lib/e39maps/                writable state (StateDirectory)
 /var/lib/e39maps/db.sqlite3      Django state DB (v1: the installed dataset)
@@ -103,8 +109,8 @@ starts, or `{% static %}` raises `ValueError` and `/` returns 500. That is why
 Use these; do not duplicate them:
 
 - `layers/meta-e39rpi-maps/conf/layer.conf` — collection `e39rpimaps`,
-  depends `e39rpibase e39rpigui`, `LAYERSERIES_COMPAT = "scarthgap"`.
-  It is already in `bblayers.conf`.
+  depends `e39rpibase e39rpigui meta-python openembedded-layer`,
+  `LAYERSERIES_COMPAT = "scarthgap"`. It is already in `bblayers.conf`.
 - `layers/meta-e39rpi-gui/recipes-hmi/e39rpi-hmi/e39rpi-hmi.bb` — the pattern
   to copy for `externalsrc`, `file://` units, `tmpfiles.d`, and systemd.
 - `layers/meta-e39rpi-base/recipes-core/e39rpi-growroot/` — first-boot root
@@ -156,7 +162,15 @@ have.
 cd ~/e39-rpi-yocto
 git submodule add https://github.com/linster/e39-rpi-maps.git e39-rpi-maps
 git submodule update --init --recursive
+# The database is Git LFS: smudge it in the submodule checkout. externalsrc
+# builds the working tree as-is, so a pointer file would otherwise be shipped.
+git -C e39-rpi-maps lfs pull
 ```
+
+`git-lfs` must be installed on every build host. A normal `git clone` leaves
+LFS pointer files; `git lfs pull` (or `git lfs install` before cloning) is
+required. The data recipe detects pointer files and fails with an explicit
+message rather than packaging one.
 
 Then in `layers/meta-e39rpi-maps/conf/layer.conf`:
 
@@ -186,6 +200,14 @@ do not ship an image built from a dirty submodule without recording it.
 meta-e39rpi-maps/
 ├── conf/
 │   └── layer.conf
+├── recipes-core/
+│   ├── images/
+│   │   └── e39rpi-hmi-image.bbappend
+│   └── packagegroups/
+│       └── packagegroup-e39rpi-maps.bb
+├── recipes-devtools/
+│   └── python/
+│       └── python3-django_5.2.19.bb
 └── recipes-maps/
     ├── e39maps/
     │   ├── e39maps_git.bb
@@ -249,7 +271,7 @@ USERADD_PARAM:${PN} = "--system --home /var/lib/e39maps \
 do_install() {
     install -d ${D}${datadir}/e39rpi-maps
     cp -R --no-preserve=ownership \
-        ${S}/manage.py ${S}/e39maps ${S}/core \
+        ${S}/src/manage.py ${S}/src/e39maps ${S}/src/core \
         ${D}${datadir}/e39rpi-maps/
 
     # Never ship local state or build artifacts.
@@ -268,7 +290,8 @@ do_install() {
     install -d ${D}${sysconfdir}
     install -m 0644 ${WORKDIR}/e39maps.env ${D}${sysconfdir}/e39maps.env
 
-    install -Dm0644 ${S}/.env.example ${D}${docdir}/${PN}/env.example
+    install -Dm0644 ${S}/src/.env.example ${D}${docdir}/${PN}/env.example
+    install -Dm0644 ${S}/LICENSE ${D}${docdir}/${PN}/LICENSE
 }
 
 FILES:${PN} += " \
@@ -448,8 +471,8 @@ This is the main integration decision. There are two database roles:
    writable.
 
 The rootfs is writable, so the simplest working design is **one writable
-database** installed from a prebuilt artifact. For a read-only base plus user
-edits, see "Split databases" below.
+database** installed from the prebuilt file in `output/db/`. For a read-only
+base plus user edits, see "Split databases" below.
 
 ### 8.1 Recommended: build the DB on the host, ship it as a package
 
@@ -466,32 +489,40 @@ host (or CI) in an environment that matches the target's geospatial libraries:
 
 SpatiaLite is the compatibility risk: a database created with a newer
 `libspatialite` may not open or may try to upgrade metadata on the device.
-Build with 5.0.1 (e.g. a Debian/Ubuntu container that has it), and record the
-versions in the artifact's `VERSION`/manifest.
+Build with 5.0.1 (e.g. a Debian/Ubuntu container that has it). The recipe's
+`VERSION` is a content hash, so the library versions are not encoded there;
+record them in the commit message and in `output/db/README.md` if you change
+the build environment.
 
-Before packaging:
+Before committing:
 
 ```sh
 # In the build container, after the import:
-python manage.py migrate                 # if the artifact includes Django tables
-sqlite3 osm.sqlite "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; ANALYZE;"
-sqlite3 osm.sqlite "PRAGMA integrity_check;"   # must print "ok"
-rm -f osm.sqlite-wal osm.sqlite-shm
-zstd -19 -T0 -o e39maps-osm-<region>-<date>.sqlite.zst osm.sqlite
-sha256sum e39maps-osm-<region>-<date>.sqlite.zst
+python manage.py migrate                 # if the database includes Django tables
+sqlite3 e39maps-osm.sqlite "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; ANALYZE;"
+sqlite3 e39maps-osm.sqlite "PRAGMA integrity_check;"   # must print "ok"
+rm -f e39maps-osm.sqlite-wal e39maps-osm.sqlite-shm
+cp e39maps-osm.sqlite <this-repo>/output/db/
+cd <this-repo>
+git lfs install                          # once per machine
+git add output/db/e39maps-osm.sqlite
+git lfs ls-files                         # the database must be listed
+git commit
 ```
 
-Also ship:
-
-- `VERSION` — e.g. `2026-11-01.<git-sha>.<schema-version>`; the installer uses
-  it to decide whether to replace the installed DB.
-- `ATTRIBUTION.txt` — "© OpenStreetMap contributors, ODbL 1.0" plus the
-  license text/link. The OSM data is **ODbL-1.0**, not MPL-2.0.
-
-Do not put a multi-hundred-MB artifact in git. Publish it as a release asset
-or on an artifact server and reference it from the data recipe.
+The repository ships `output/db/ATTRIBUTION.txt` (ODbL notice) next to the
+database; the recipe installs it into the package.
 
 ### 8.2 `e39maps-data` recipe
+
+The recipe reads `${S}/output/db` from the submodule checkout. It accepts an
+uncompressed `*.sqlite`/`*.sqlite3` (compressed with host `zstd` at build
+time) or an already compressed `*.sqlite.zst`. It derives `VERSION` from the
+SHA-256 of the input file, so changing the database is a package upgrade
+without a manual version bump.
+
+If there is no database in `output/db`, the recipe **skips** at parse time so
+the app can be built before the first import.
 
 ```bitbake
 SUMMARY = "Pre-populated OSM/SpatiaLite database for e39-rpi-maps"
@@ -499,33 +530,69 @@ HOMEPAGE = "https://github.com/linster/e39-rpi-maps"
 LICENSE = "ODbL-1.0"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/ODbL-1.0;md5=498d26a501c10739d57fca1c9d80bbc2"
 
-# Replace with the real artifact URL and checksum. Keep the dataset version in
-# PV so a new artifact is a package upgrade.
-PV = "2026-11-01"
-SRC_URI = "https://example.invalid/e39maps-osm-<region>-${PV}.sqlite.zst;downloadfilename=e39maps-osm.sqlite.zst;name=data \
-           file://ATTRIBUTION.txt"
-SRC_URI[data.sha256sum] = "<sha256 of the .zst>"
+E39_MAPS_SRC ?= "${E39_MAPS_SRC_DEFAULT}"
+EXTERNALSRC = "${E39_MAPS_SRC}"
+EXTERNALSRC_SYMLINKS = ""
 
-S = "${WORKDIR}"
+inherit externalsrc allarch
 
-inherit allarch
+# Pick the database at parse time and skip cleanly when there is none.
+python () {
+    import glob, os
+    dbdir = os.path.join(d.getVar("EXTERNALSRC") or "", "output", "db")
+    found = sorted(glob.glob(os.path.join(dbdir, "*.sqlite")) +
+                   glob.glob(os.path.join(dbdir, "*.sqlite3")) +
+                   glob.glob(os.path.join(dbdir, "*.sqlite.zst")) +
+                   glob.glob(os.path.join(dbdir, "*.sqlite3.zst")))
+    if not found:
+        raise bb.parse.SkipRecipe("no database in %s (see output/db/README.md)" % dbdir)
+    if len(found) > 1:
+        raise bb.parse.SkipRecipe("more than one database in %s: %s"
+                                  % (dbdir, ", ".join(os.path.basename(f) for f in found)))
+    d.setVar("E39_MAPS_DB", found[0])
+}
+
+E39_MAPS_DB_NAME = "e39maps-osm.sqlite.zst"
 
 do_install() {
+    db="${E39_MAPS_DB}"
+
+    # A plain clone leaves Git LFS pointer files. Fail loudly instead of
+    # packaging a 130-byte "database".
+    if head -n 1 "$db" | grep -q '^version https://git-lfs.github.com/spec/v1'; then
+        bbfatal "$db is a Git LFS pointer. Run 'git lfs pull' in ${EXTERNALSRC}."
+    fi
+
     install -d ${D}${datadir}/e39rpi-maps/data
-    install -m 0644 ${WORKDIR}/e39maps-osm.sqlite.zst ${D}${datadir}/e39rpi-maps/data/
-    echo "${PV}" > ${D}${datadir}/e39rpi-maps/data/VERSION
+
+    case "$db" in
+        *.zst)
+            install -m 0644 "$db" ${D}${datadir}/e39rpi-maps/data/${E39_MAPS_DB_NAME}
+            ;;
+        *)
+            zstd -19 -T0 -q -f -o ${D}${datadir}/e39rpi-maps/data/${E39_MAPS_DB_NAME} "$db"
+            chmod 0644 ${D}${datadir}/e39rpi-maps/data/${E39_MAPS_DB_NAME}
+            ;;
+    esac
+
+    # Content hash: stable across zstd versions and a changed DB is a new
+    # package version.
+    printf 'sha256-%s\n' "$(sha256sum "$db" | cut -d' ' -f1)" \
+        > ${D}${datadir}/e39rpi-maps/data/VERSION
     chmod 0644 ${D}${datadir}/e39rpi-maps/data/VERSION
-    install -m 0644 ${WORKDIR}/ATTRIBUTION.txt ${D}${datadir}/e39rpi-maps/data/
+
+    install -m 0644 ${S}/output/db/ATTRIBUTION.txt \
+        ${D}${datadir}/e39rpi-maps/data/ATTRIBUTION.txt
 }
 
 FILES:${PN} = "${datadir}/e39rpi-maps/data"
 RDEPENDS:${PN} = "zstd"
 ```
 
-For local development, override `SRC_URI`/`E39_MAPS_DATA_SRC` to a `file://`
-path or use `devtool`; do not commit the artifact to the layer. Put
-`ATTRIBUTION.txt` in the recipe's `files/` directory (it is not part of the
-large artifact).
+`externalsrc` hashes the whole checkout (including the database) to decide
+whether to rebuild; that is the cost of getting automatic rebuilds when the
+LFS blob changes. If that becomes slow with a multi-GB database, use a
+pre-compressed `.sqlite.zst` or a smaller extract.
 
 ### 8.3 First-boot installer
 
@@ -612,7 +679,7 @@ Notes:
 
 **v1 (recommended): one writable DB.**
 
-- Install the artifact to `/var/lib/e39maps/db.sqlite3`.
+- Install the database to `/var/lib/e39maps/db.sqlite3`.
 - `migrate` in the init unit applies any app migrations.
 - Admin can edit everything.
 - Downside: installing a new dataset **overwrites admin edits**. Treat OSM
@@ -630,7 +697,7 @@ Notes:
   auth/admin/user models to `default`.
 - No cross-database joins. Keep queries within one alias.
 - SpatiaLite tables live in the read-only DB; `InitSpatialMetaData` must have
-  run when the artifact was built. Django's SpatiaLite backend checks
+  run when the database was built. Django's SpatiaLite backend checks
   `geometry_columns` on connect and only initializes when it is empty.
 - Updates become a package upgrade of `e39maps-data` (atomic at the file
   level), and user edits survive.
@@ -653,11 +720,11 @@ single-DB path is much less code for the hello-world stage.
 ### 8.6 Space budget
 
 `IMAGE_ROOTFS_EXTRA_SPACE` is 512 MiB, and the card grows to fill the SD on
-first boot. The **image** still has to contain the compressed artifact, and
+first boot. The **image** still has to contain the compressed database, and
 first boot needs room for the decompressed DB plus a temp copy. A regional
 extract that compresses to a few hundred MB is fine on a 16 GB card; a
-multi-GB dataset is not. Measure the artifact before committing to this
-approach.
+multi-GB dataset is not. Measure the database before committing it, and mind
+the Git LFS quota (see `output/db/README.md`).
 
 ---
 
@@ -710,8 +777,13 @@ cd ~/e39-rpi-yocto
 source setup-env                      # or the usual oe-init-build-env
 bitbake e39maps e39maps-data
 oe-pkgdata-util list-pkg-files -p e39maps
+oe-pkgdata-util list-pkg-files -p e39maps-data
 bitbake e39rpi-hmi-image
 ```
+
+`e39maps-data` is expected to report `SkipRecipe` until a database exists in
+`output/db/`. `bitbake -e e39maps-data` shows the resolved `E39_MAPS_DB` and
+`VERSION` input when it does.
 
 On the target or `runqemu`:
 
@@ -735,7 +807,8 @@ Also verify:
 - `/var/lib/e39maps/secret_key` is mode `0600`.
 - A reboot does not regenerate the key and does not rerun the data installer
   when `VERSION` is unchanged.
-- Bumping `e39maps-data`'s `PV` replaces the DB on the next boot and logs it.
+- Replacing the database in `output/db/` (new content hash) replaces the
+  installed DB on the next boot and logs it.
 - `DJANGO_ALLOWED_HOSTS` matches how clients reach the device.
 
 `manage.py check --deploy` with `DJANGO_HTTPS=1` should be clean. With plain
@@ -758,11 +831,13 @@ device. Do not enable HSTS on plain HTTP.
 - [ ] `DJANGO_ALLOWED_HOSTS` includes the device hostname/IP.
 - [ ] Port **8080**; 8000 belongs to MPD.
 - [ ] One gunicorn worker, `MemoryMax` set.
-- [ ] Dataset is a separate `e39maps-data` package, ODbL-1.0, checksummed.
+- [ ] Database is a separate `e39maps-data` package, ODbL-1.0, content-hashed.
+- [ ] Database is in `output/db/` and tracked by Git LFS; build hosts ran
+      `git lfs pull` and the recipe did not see a pointer file.
 - [ ] Build the dataset with libspatialite **5.0.1** to match the image.
 - [ ] Install dataset after `e39rpi-growroot.service`; check free space.
 - [ ] Installed DB is owned by `e39maps` (the installer runs as that user; the
-      `tmpfiles.d` variant uses the `Z` line); no `-wal`/`-shm` in the artifact.
+      `tmpfiles.d` variant uses the `Z` line); no `-wal`/`-shm` in the database.
 - [ ] Don't ship users/sessions/secret key in the DB.
 - [ ] If Django stays at 5.0.11, fix the `init_command` incompatibility.
 - [ ] Verify Python module package names for scarthgap.
@@ -776,6 +851,8 @@ device. Do not enable HSTS on plain HTTP.
 # In the app repo
 git rev-parse HEAD                              # submodule commit to pin
 md5sum LICENSE                                  # LIC_FILES_CHKSUM
+git lfs ls-files -s                             # database is in LFS?
+git -C ../e39-rpi-yocto/e39-rpi-maps lfs pull  # smudge the submodule checkout
 
 # In the Yocto repo
 git submodule status
@@ -794,5 +871,7 @@ devtool modify e39maps                          # local iteration only
 - No gRPC service, generated stubs, or `run_grpc_server` command yet.
 - No custom user model; admin uses Django's default.
 - No `pyproject.toml`; source-tree installation is intentional for now.
-- The app is pinned to Django 5.2.19, while the pinned meta-python has 5.0.11.
-  Resolve that before building (see §2).
+- No database is committed yet: `e39maps-data` skips until the first
+  `output/db/*.sqlite` is added and pushed with Git LFS.
+- The app is pinned to Django 5.2.19; the layer adds
+  `python3-django_5.2.19.bb` (see §2).

@@ -1,0 +1,10 @@
+# Large database artifacts live in Git LFS (see output/db/README.md).
+#
+# Keep these patterns in sync with the e39maps-data recipe: it looks for
+# output/db/*.sqlite (and .sqlite3), and compresses them at build time.
+output/db/*.sqlite filter=lfs diff=lfs merge=lfs -text
+output/db/*.sqlite3 filter=lfs diff=lfs merge=lfs -text
+output/db/*.sqlite.zst filter=lfs diff=lfs merge=lfs -text
+output/db/*.sqlite3.zst filter=lfs diff=lfs merge=lfs -text
+output/db/*.pbf filter=lfs diff=lfs merge=lfs -text
+output/db/*.osm.pbf filter=lfs diff=lfs merge=lfs -text

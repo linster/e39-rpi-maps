@@ -1,0 +1,18 @@
+OpenStreetMap data
+==================
+
+The map database in this directory is derived from OpenStreetMap data.
+
+    © OpenStreetMap contributors
+
+The database is made available under the Open Database License (ODbL) 1.0:
+https://opendatacommons.org/licenses/odbl/1-0/
+
+You are free to copy, distribute, transmit and adapt the database, as long
+as you attribute the source and share alike. Any derivative database must
+be offered under the same license. The full license text is available at
+the URL above and in the Yocto build's common licenses
+(`ODbL-1.0`, md5 498d26a501c10739d57fca1c9d80bbc2).
+
+The Django application code in this repository is separate and is licensed
+under the Mozilla Public License 2.0; see ../../LICENSE.
