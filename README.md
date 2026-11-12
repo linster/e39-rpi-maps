@@ -208,25 +208,23 @@ PostGIS if we hit a feature that truly needs it.
 Do the expensive work off-device:
 
 - Import a **regional OSM extract** (Geofabrik `.osm.pbf`), not the planet.
-- Run `osm2pgsql`/import on the x86 build host, then ship the resulting
-  database as a **separate `e39maps-data` package**: a zstd-compressed SQLite
-  file with a checksum, installed read-only under
-  `/usr/share/e39rpi-maps/data/`, and installed into `/var/lib/e39maps/` by a
-  first-boot oneshot. Importing on a Pi is slow and can exhaust RAM.
+- Build the map database on the laptop (the map toolkit, still to come),
+  then ship it as a **separate `e39maps-data` package**: the SQLite file,
+  installed read-only in `/usr/share/e39rpi-maps/data/` and opened there in
+  place (no copy, no decompression on the device). Importing on a Pi is slow
+  and can exhaust RAM.
 - Build the artifact with the image's library versions (`libspatialite` 5.0.1,
   GEOS 3.12.1, PROJ 9.3.1) — a SpatiaLite file from a newer library may not
   open on the device.
 - OSM-derived data is **ODbL-1.0**, not MPL-2.0; ship the attribution notice
   with the artifact.
-- If the dataset is read-only, open it with SQLite `immutable=1` / read-only
-  mode and put only the mutable admin/state DB in `/var/lib`. Avoid WAL churn
-  on the SD card for data that never changes. (The first iteration can use one
-  writable DB; see `Yocto_instructions.md` §8 for the split.)
-- Keep the prebuilt DB in `output/db/`, tracked by **Git LFS**. The data
-  recipe reads it from the submodule checkout, compresses it with host `zstd`,
-  and derives a content-hash `VERSION`, so a changed database is a package
-  upgrade. Build hosts need `git-lfs` and must smudge the submodule checkout
-  (`git lfs pull`); `externalsrc` does not fetch LFS objects itself.
+- The map database is read-only and opened `immutable=1`; the writable
+  state (users, admin, user POIs) is a second database in `/var/lib`, so map
+  updates keep user content (see "Databases").
+- Keep the prebuilt DB in `output/db/`, tracked by **Git LFS**; build hosts
+  need `git-lfs` and `git lfs pull` in the submodule checkout (a pointer file
+  stops the build). Over 2 GB: a directory on the build machine instead
+  (`E39_MAPS_DATA_DIR` in the Yocto build's `local.conf`).
 
 ### 5. gRPC
 

@@ -32,20 +32,20 @@ output/db/
 └── README.md                 # this file
 ```
 
-`e39maps-data_git.bb` in `meta-e39rpi-maps` looks for the first `*.sqlite` or
-`*.sqlite3` in this directory, compresses it with `zstd` on the build host,
-and writes a content-hash `VERSION` into the package. No `.zst` needs to be
-committed: if you have a pre-compressed `*.sqlite.zst`, the recipe uses it
-as-is.
+`e39maps-data.bb` in `meta-e39rpi-maps` (e39-rpi-yocto) packages
+`e39maps-osm.sqlite` and `ATTRIBUTION.txt` from this directory as they are;
+the backend opens the database read-only in place on the device. A changed
+file rebuilds the package.
 
-If the directory contains no database, the recipe **skips** instead of
-failing, so the app can still be built before the first import.
+Without a database the package is empty (the build warns) and the backend
+runs without map data. A Git LFS pointer file (no `git lfs pull`) stops the
+build. Over 2 GB: keep the files on the build machine and set
+`E39_MAPS_DATA_DIR` in the Yocto build's `local.conf` instead of using LFS.
 
 ## Building the database
 
-Do this on the x86 build host, never on the Pi. See
-[`../../Yocto_instructions.md`](../../Yocto_instructions.md) §8 for the full
-procedure. In short:
+Do this on the x86 build host, never on the Pi (the map toolkit will do it).
+In short:
 
 1. Import a regional Geofabrik `.osm.pbf` into SQLite/SpatiaLite using the
    same library versions as the image (`libspatialite` 5.0.1, GEOS 3.12.1,
@@ -66,9 +66,9 @@ installed into `/usr/share/e39rpi-maps/data/` by the data package.
 ## Updating the database
 
 Replace the file, commit it, and bump the parent `e39-rpi-yocto` submodule
-pointer. The recipe derives `VERSION` from the file content, so a changed
-database is a changed package, and the first-boot installer replaces the
-installed copy.
+pointer: the next image contains the new database. On a running device the
+map toolkit's push (still to come) replaces just this file; the state
+database, with users and user POIs, is never touched.
 
 ## Quota warning
 
