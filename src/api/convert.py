@@ -19,6 +19,7 @@ def poi_to_pb(poi: Poi) -> pois_pb2.Poi:
         icon.colored_circle.argb = poi.icon_argb
     elif poi.icon_kind == Poi.IconKind.BUNDLED:
         icon.bundled.file_name = poi.icon_file
+        icon.bundled.tint_argb = poi.icon_tint or 0
     else:
         icon.none.SetInParent()
     return pois_pb2.Poi(
@@ -46,11 +47,12 @@ def apply_pb_to_poi(msg: pois_pb2.Poi, poi: Poi, fields=EDITABLE) -> None:
         poi.longitude = msg.location.longitude
     if "icon" in fields:
         kind = msg.icon.WhichOneof("kind")
-        poi.icon_argb, poi.icon_file = None, ""
+        poi.icon_argb, poi.icon_file, poi.icon_tint = None, "", None
         if kind == "colored_circle":
             poi.icon_kind, poi.icon_argb = Poi.IconKind.COLORED_CIRCLE, msg.icon.colored_circle.argb
         elif kind == "bundled":
             poi.icon_kind, poi.icon_file = Poi.IconKind.BUNDLED, msg.icon.bundled.file_name
+            poi.icon_tint = msg.icon.bundled.tint_argb or None
         else:
             poi.icon_kind = Poi.IconKind.NONE
     if "visible" in fields:

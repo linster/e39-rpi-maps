@@ -56,8 +56,12 @@ message PoiIcon {
     uint32 argb = 1;
   }
   message BundledIcon {
-    // An icon file bundled with the HMI.
+    // An icon bundled with the HMI: its Compose resource name (a key of the
+    // HMI's Res.allDrawableResources, e.g. "poi_fuel").
     string file_name = 1;
+    // Colour the icon is drawn in, 0xAARRGGBB. 0 (unset; a fully transparent
+    // tint would be invisible) = the HMI's default, white.
+    uint32 tint_argb = 2;
   }
 }
 

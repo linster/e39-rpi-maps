@@ -30,10 +30,12 @@ class PoiIcon(_message.Message):
         argb: int
         def __init__(self, argb: _Optional[int] = ...) -> None: ...
     class BundledIcon(_message.Message):
-        __slots__ = ("file_name",)
+        __slots__ = ("file_name", "tint_argb")
         FILE_NAME_FIELD_NUMBER: _ClassVar[int]
+        TINT_ARGB_FIELD_NUMBER: _ClassVar[int]
         file_name: str
-        def __init__(self, file_name: _Optional[str] = ...) -> None: ...
+        tint_argb: int
+        def __init__(self, file_name: _Optional[str] = ..., tint_argb: _Optional[int] = ...) -> None: ...
     NONE_FIELD_NUMBER: _ClassVar[int]
     COLORED_CIRCLE_FIELD_NUMBER: _ClassVar[int]
     BUNDLED_FIELD_NUMBER: _ClassVar[int]

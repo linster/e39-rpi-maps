@@ -11,7 +11,7 @@ class PoiAdmin(admin.ModelAdmin):
     readonly_fields = ("created", "updated")
     fieldsets = (
         (None, {"fields": ("name", "latitude", "longitude", "visible")}),
-        ("Icon", {"fields": ("icon_kind", "icon_argb", "icon_file")}),
+        ("Icon", {"fields": ("icon_kind", "icon_argb", "icon_file", "icon_tint")}),
         ("Timestamps", {"fields": ("created", "updated")}),
     )
 
@@ -20,5 +20,6 @@ class PoiAdmin(admin.ModelAdmin):
         if poi.icon_kind == Poi.IconKind.COLORED_CIRCLE and poi.icon_argb is not None:
             return f"circle #{poi.icon_argb:08X}"
         if poi.icon_kind == Poi.IconKind.BUNDLED:
-            return f"file {poi.icon_file}"
+            tint = f" #{poi.icon_tint:08X}" if poi.icon_tint is not None else ""
+            return f"icon {poi.icon_file}{tint}"
         return "-"

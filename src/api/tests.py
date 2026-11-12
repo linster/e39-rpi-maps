@@ -69,8 +69,13 @@ class PoiCrudTests(GrpcTestCase):
         self.assertFalse(Poi.objects.filter(pk=created.id).exists())
 
     def test_icons_round_trip(self):
-        bundled = self.create(icon=pois_pb2.PoiIcon(bundled=pois_pb2.PoiIcon.BundledIcon(file_name="fuel.png")))
-        self.assertEqual(bundled.icon.bundled.file_name, "fuel.png")
+        bundled = self.create(icon=pois_pb2.PoiIcon(bundled=pois_pb2.PoiIcon.BundledIcon(
+            file_name="poi_fuel", tint_argb=0xFF00FF00)))
+        self.assertEqual((bundled.icon.bundled.file_name, bundled.icon.bundled.tint_argb), ("poi_fuel", 0xFF00FF00))
+        self.assertEqual(Poi.objects.get(pk=bundled.id).icon_tint, 0xFF00FF00)
+        untinted = self.create(icon=pois_pb2.PoiIcon(bundled=pois_pb2.PoiIcon.BundledIcon(file_name="poi_fuel")))
+        self.assertEqual(untinted.icon.bundled.tint_argb, 0)
+        self.assertIsNone(Poi.objects.get(pk=untinted.id).icon_tint)
         plain = self.create(name="No icon")
         self.assertEqual(plain.icon.WhichOneof("kind"), "none")
 

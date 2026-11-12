@@ -24,8 +24,11 @@ class Poi(models.Model):
     icon_argb = models.PositiveBigIntegerField(
         null=True, blank=True, validators=[MaxValueValidator(0xFFFFFFFF)],
         help_text="0xAARRGGBB, for a coloured circle")
-    # A file bundled with the HMI, for BUNDLED.
+    # An icon bundled with the HMI (its resource name) and its tint, for BUNDLED.
     icon_file = models.CharField(max_length=255, blank=True)
+    icon_tint = models.PositiveBigIntegerField(
+        null=True, blank=True, validators=[MaxValueValidator(0xFFFFFFFF)],
+        help_text="0xAARRGGBB, for a bundled icon; empty = white")
     visible = models.BooleanField(default=True, help_text="Shown on the HMI's map")
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
