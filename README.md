@@ -100,6 +100,12 @@ copied beside the database rather than hard-linked from the cache
   `E39_MAPS_DATA_DIR` from its `local.conf`) and starts the image build
   (qemuarm64 or raspberrypi4-64) with its progress window, so `run-qemu.sh`
   and the SD card tools use an image with this map.
+- **Published maps** (GitHub releases; log in once with `gh auth login`):
+  **Publish local map**, then pick a release to **Download**, **Download +
+  live swap** or **Download + copy to USB stick** (commands: `publish`,
+  `releases`, `fetch`, `push --release TAG`, `usb DIR [--release TAG]`).
+  Downloads are checked against the release's `map-release.json` (SHA-256)
+  and kept in `~/.cache/e39maps-toolkit/published/<tag>`.
 - **USB stick** (no laptop needed): put the database and its routing
   tiles in a folder `RPIMAPS` on a stick and plug it into the device;
   they're checked and installed, then renamed on the stick to
@@ -177,7 +183,8 @@ src/
 proto/              the gRPC contract (.proto)
 scripts/            gen-proto.sh
 toolkit/            the map toolkit (laptop only): build and push map databases
-output/db/          pre-populated map database (Git LFS) + ODbL attribution
+output/db/          the local map (database + routing tiles; not committed) + ODbL attribution
+map-release.json    pins the published map image builds ship (map_updates.md)
 ```
 
 The split matters for the Yocto build: the recipe installs `src/` as the
@@ -186,9 +193,12 @@ large database does not rebuild the code (and vice versa).
 
 Future apps (`maps`, `routing`) slot in next to `core`.
 
-The database in `output/db/` is stored with **Git LFS** (there is no artifact
-server); see [`output/db/README.md`](output/db/README.md). Run `git lfs install`
-once per machine and `git lfs pull` after cloning.
+Maps aren't committed. A map worth keeping is **published as a GitHub
+release** of this repository (`map-<built_at>`: the database, its routing
+tiles, `ATTRIBUTION.txt`, `map-release.json`), and the committed
+`map-release.json` pins the one image builds ship. `output/db/` is the
+local working copy (git-ignored). How to publish, download, push or put a
+map on a USB stick: [`map_updates.md`](map_updates.md).
 
 ## Configuration
 
@@ -352,10 +362,11 @@ Do the expensive work off-device:
 - The map database is read-only and opened `immutable=1`; the writable
   state (users, admin, user POIs) is a second database in `/var/lib`, so map
   updates keep user content (see "Databases").
-- Keep the prebuilt DB in `output/db/`, tracked by **Git LFS**; build hosts
-  need `git-lfs` and `git lfs pull` in the submodule checkout (a pointer file
-  stops the build). Over 2 GB: a directory on the build machine instead
-  (`E39_MAPS_DATA_DIR` in the Yocto build's `local.conf`).
+- Published maps are GitHub release assets (no quota; each file under 2
+  GiB), pinned by `map-release.json`; build machines fetch the pinned one
+  with `scripts/fetch-map.py` (e39-rpi-yocto: `scripts/fetch-map.sh`). Git
+  LFS was considered and dropped: 10 GiB of free storage and monthly
+  bandwidth would last about 15 map versions or clones.
 
 ### 5. gRPC
 

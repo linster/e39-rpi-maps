@@ -97,6 +97,15 @@ serve_builds &
 HELPER=$!
 trap 'kill $HELPER 2>/dev/null; rm -rf "$REQUESTS"' EXIT
 
+# Published maps (GitHub releases): the token of this machine's gh login.
+# gh may keep it in the desktop keyring, which the container can't reach, so
+# hand it over in the environment (not on the command line, where ps shows it).
+GH_ARGS=()
+if [ -z "${GH_TOKEN:-}" ] && command -v gh >/dev/null && GH_TOKEN="$(gh auth token 2>/dev/null)"; then
+    export GH_TOKEN
+fi
+[ -n "${GH_TOKEN:-}" ] && GH_ARGS=(-e GH_TOKEN)
+
 TTY_ARGS=()
 [ -t 0 ] && [ -t 1 ] && TTY_ARGS=(-it)
 
@@ -106,6 +115,6 @@ $ENGINE run --rm "${TTY_ARGS[@]}" "${USER_ARGS[@]}" \
     -e PYTHONPATH="$HERE:$REPO/src" \
     -e E39MAPS_HOST_BUILDS="$REQUESTS" -v "$REQUESTS:$REQUESTS" \
     -e E39MAPS_TOOLKIT_CONTAINER="$IMAGE" \
-    "${MOUNTS[@]}" "${X_ARGS[@]}" \
+    "${MOUNTS[@]}" "${X_ARGS[@]}" "${GH_ARGS[@]}" \
     -w "$REPO" \
     "$IMAGE" "$@"

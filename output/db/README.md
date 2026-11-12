@@ -3,31 +3,20 @@
 This directory holds the pre-populated OSM database that the Yocto image
 ships. It is **not** part of the Django source tree (`src/`).
 
-## Why Git LFS
+## Not committed
 
-The database is far too large for a normal git object, and there is no
-artifact server. Git LFS keeps the blob out of the repository history while
-still letting the Yocto build pull it from the same commit as the code.
-
-The patterns in the repository root `.gitattributes` send these files to LFS:
-
-```
-output/db/*.sqlite
-output/db/*.sqlite3
-output/db/*.sqlite.zst
-output/db/*.sqlite3.zst
-output/db/*.pbf
-output/db/*.osm.pbf
-```
-
-Install the client once per machine (`git lfs install`), then add files
-normally; `git lfs ls-files` should list them.
+Maps are published as GitHub releases and pinned by `map-release.json` in
+the repository root (see [`../../map_updates.md`](../../map_updates.md));
+this directory is the local working copy, git-ignored apart from this file
+and `ATTRIBUTION.txt`. A build machine fills it with the pinned map:
+`scripts/fetch-map.py` (or e39-rpi-yocto's `scripts/fetch-map.sh`).
 
 ## Layout expected by the recipes
 
 ```
 output/db/
-├── e39maps-osm.sqlite        # the SQLite map database, built by the toolkit (LFS)
+├── e39maps-osm.sqlite        # the map database (toolkit build, or fetched)
+├── e39maps-osm.routing.tar   # its routing tiles (named in the database)
 ├── ATTRIBUTION.txt           # ODbL notice (committed normally)
 └── README.md                 # this file
 ```
@@ -38,9 +27,10 @@ the backend opens the database read-only in place on the device. A changed
 file rebuilds the package.
 
 Without a database the package is empty (the build warns) and the backend
-runs without map data. A Git LFS pointer file (no `git lfs pull`) stops the
-build. Over 2 GB: keep the files on the build machine and set
-`E39_MAPS_DATA_DIR` in the Yocto build's `local.conf` instead of using LFS.
+runs without map data. The build also says whether the map here is the
+published one `map-release.json` pins, or a locally built one. Elsewhere on
+the build machine: set `E39_MAPS_DATA_DIR` in the Yocto build's
+`local.conf`.
 
 ## Building the database
 
@@ -65,11 +55,3 @@ pointer: the next image contains the new database (or use the toolkit's
 device the toolkit's live swap, or a USB stick with an `RPIMAPS` folder,
 replaces just this file; the state database, with users and user POIs, is
 never touched.
-
-## Quota warning
-
-GitHub's free LFS quota (1 GB storage and 1 GB/month bandwidth) is small.
-A regional extract can exceed it quickly, and every build host and CI run
-that clones the submodule consumes bandwidth. Check
-`git lfs ls-files -s` before committing, keep only one database file, and
-consider a smaller extract if the quota becomes a problem.

@@ -32,7 +32,7 @@ packages in Yocto; a newly imported one may need adding too.
 | WSGI entry | `e39maps.wsgi:application`, run from the app directory |
 | Management | `python3 manage.py migrate --noinput`, `collectstatic --noinput --clear`, `run_grpc_server` (runs until SIGTERM) |
 | Settings | environment variables only (below) |
-| Map data | `output/db/e39maps-osm.sqlite` (Git LFS) + its routing tiles `output/db/e39maps-osm.routing.tar` (named in the database's facts) + `output/db/ATTRIBUTION.txt` |
+| Map data | `output/db/e39maps-osm.sqlite` (not committed: the published map `map-release.json` pins, fetched with `scripts/fetch-map.py`, or a local build) + its routing tiles `output/db/e39maps-osm.routing.tar` (named in the database's facts) + `output/db/ATTRIBUTION.txt` |
 | Map database format | `src/mapdata/schema.py`: importable **without Django** (the device's `e39maps-mapdb` and the toolkit import it); `schema.check(path)` validates a file |
 
 Environment on the device (`/etc/default/e39maps`):
@@ -65,7 +65,8 @@ Environment on the device (`/etc/default/e39maps`):
   `MemoryMax`, after `e39maps-init`.
 - **Map data** is a separate package (`e39maps-data`, ODbL). A map update
   replaces only that file; the state database keeps users and user POIs.
-  Data over 2 GB: build machine path (`E39_MAPS_DATA_DIR`) instead of LFS.
+  Map data elsewhere on the build machine: `E39_MAPS_DATA_DIR`. The data
+  recipe notes whether it ships the pinned published map.
 - **Map updates on a running device**: `/usr/libexec/e39maps-mapdb install
   [--move] <file>` (checks with `mapdata.schema`, stops `e39maps` and
   `e39maps-grpc`, swaps the file, starts them), used by the toolkit's live

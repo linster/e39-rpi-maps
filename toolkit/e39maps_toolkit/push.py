@@ -192,3 +192,48 @@ def _request_host_build(requests, yocto_dir, machine, timeout=120):
     text = reply.read_text()
     reply.unlink()
     return text, text.rstrip().endswith("exit=0")
+
+
+USB_FOLDER = "RPIMAPS"
+FAT32_MAX = 4 * 1024 ** 3 - 1
+
+
+def copy_to_usb(db_path, stick_dir, log=print, progress=None):
+    """Put the map pair on a USB stick: <stick>/RPIMAPS/, under the names the
+    database records, so the device's USB import (e39maps-usb-import@)
+    installs it when the stick is plugged in. Returns the folder."""
+    db_path = Path(db_path)
+    meta, tiles = paired_files(db_path, log)
+    stick = Path(stick_dir)
+    if not stick.is_dir():
+        raise PushError(f"{stick} isn't a folder (the stick's mount point, e.g. /media/$USER/STICK)")
+    folder = next((d for d in stick.iterdir() if d.is_dir() and d.name.upper() == USB_FOLDER),
+                  stick / USB_FOLDER)
+    folder.mkdir(exist_ok=True)
+    files = [db_path] + ([tiles] if tiles else [])
+    if (folder / db_path.name).exists():
+        raise PushError(f"{folder} has a {db_path.name} already (not imported yet?): remove it first")
+    need = sum(f.stat().st_size for f in files)
+    free = shutil.disk_usage(folder).free
+    if free < need:
+        raise PushError(f"not enough space on the stick: {need / 1e6:.0f} MB needed, {free / 1e6:.0f} MB free")
+    big = [f for f in files if f.stat().st_size > FAT32_MAX]
+    if big:
+        log(f"Note: {big[0].name} is over 4 GB: the stick must be exFAT or ext4, not FAT32")
+    for f in files:
+        log(f"Copying {f.name} ({f.stat().st_size / 1e6:.0f} MB) to {folder}...")
+        tmp = folder / f".{f.name}.copying"
+        with open(f, "rb") as src, open(tmp, "wb") as out:
+            done, size = 0, f.stat().st_size
+            while chunk := src.read(8 << 20):
+                out.write(chunk)
+                done += len(chunk)
+                if progress:
+                    progress(done / size if size else 1, f"{f.name}: {done / 1e6:.0f} / {size / 1e6:.0f} MB")
+            out.flush()
+            os.fsync(out.fileno())
+        tmp.rename(folder / f.name)
+    os.sync()
+    log(f"Done: {folder} has the map built {meta['built_at']}. Eject the stick, plug it into the car; "
+        f"once imported, the files are renamed .copied-<date> on the stick.")
+    return folder

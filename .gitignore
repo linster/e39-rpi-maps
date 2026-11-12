@@ -224,3 +224,9 @@ __marimo__/
 
 # Map toolkit virtualenv (toolkit/map-toolkit.sh)
 toolkit/.venv/
+
+# Maps aren't committed: they're published as GitHub releases and pinned by
+# map-release.json (see map_updates.md). output/db is the local working copy.
+output/db/*
+!output/db/README.md
+!output/db/ATTRIBUTION.txt

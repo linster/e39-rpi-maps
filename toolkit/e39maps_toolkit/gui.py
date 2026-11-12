@@ -10,9 +10,10 @@ from tkinter import filedialog, messagebox, ttk
 
 from mapdata import schema
 
-from .config import MACHINES, QEMU_TARGET
+from .config import MACHINES, QEMU_TARGET, REPO
 from . import versions
-from .push import PushError, live_swap, update_image
+from mapdata import release
+from .push import PushError, copy_to_usb, live_swap, update_image
 
 PAD = {"padx": 6, "pady": 3}
 
@@ -38,10 +39,11 @@ class ToolkitWindow:
         self._build_frame(main).grid(row=1, column=0, columnspan=2, sticky="nsew", **PAD)
         self._push_frame(main).grid(row=2, column=0, sticky="nsew", **PAD)
         self._image_frame(main).grid(row=2, column=1, sticky="nsew", **PAD)
+        self._release_frame(main).grid(row=3, column=0, columnspan=2, sticky="nsew", **PAD)
 
         logf = ttk.LabelFrame(main, text="Log")
-        logf.grid(row=3, column=0, columnspan=2, sticky="nsew", **PAD)
-        main.rowconfigure(3, weight=1)
+        logf.grid(row=4, column=0, columnspan=2, sticky="nsew", **PAD)
+        main.rowconfigure(4, weight=1)
         self.log_text = tk.Text(logf, height=12, wrap="word", state="disabled", font="TkFixedFont")
         scroll = ttk.Scrollbar(logf, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scroll.set)
@@ -100,6 +102,8 @@ class ToolkitWindow:
         self.build_button.grid(row=0, column=0, **PAD)
         self.cancel_button = ttk.Button(row, text="Cancel", command=self.cancel_requested.set, state="disabled")
         self.cancel_button.grid(row=0, column=1, **PAD)
+        self.local_usb_button = ttk.Button(row, text="Copy to USB stick...", command=lambda: self.start_usb(None))
+        self.local_usb_button.grid(row=0, column=4, **PAD)
         self.progress = ttk.Progressbar(row, mode="determinate", maximum=1.0)
         self.progress.grid(row=0, column=2, sticky="ew", **PAD)
         self.status = ttk.Label(row, text="", width=34)
@@ -164,6 +168,101 @@ class ToolkitWindow:
             "Valhalla version mismatch",
             "\n\n".join(found) + f"\n\n{before} anyway?", icon="warning")
 
+    def _release_frame(self, parent):
+        f = ttk.LabelFrame(parent, text="Published maps (GitHub releases)")
+        f.columnconfigure(1, weight=1)
+        ttk.Label(f, text="Release").grid(row=0, column=0, sticky="w", **PAD)
+        self.release_tag = tk.StringVar()
+        self.release_box = ttk.Combobox(f, textvariable=self.release_tag, state="readonly", width=60)
+        self.release_box.grid(row=0, column=1, sticky="ew", **PAD)
+        ttk.Button(f, text="Refresh", command=self.start_list_releases).grid(row=0, column=2, **PAD)
+        row = ttk.Frame(f)
+        row.grid(row=1, column=0, columnspan=3, sticky="w")
+        self.release_buttons = [
+            ttk.Button(row, text="Publish local map", command=self.start_publish),
+            ttk.Button(row, text="Download", command=lambda: self.start_release_action("download")),
+            ttk.Button(row, text="Download + live swap", command=lambda: self.start_release_action("swap")),
+            ttk.Button(row, text="Download + copy to USB stick...",
+                       command=lambda: self.start_release_action("usb")),
+        ]
+        for i, b in enumerate(self.release_buttons):
+            b.grid(row=0, column=i, **PAD)
+        ttk.Label(f, text="Needs a GitHub login (gh auth login). Downloads are kept in the toolkit's cache. "
+                          "Live swap uses the target on the left.", foreground="#666").grid(
+            row=2, column=0, columnspan=3, sticky="w", **PAD)
+        return f
+
+    def selected_tag(self):
+        return self.release_tag.get().split(" ", 1)[0] or None
+
+    def start_list_releases(self):
+        def work(settings):
+            pinned = (release.read_manifest(REPO) or {}).get("tag")
+            found = release.GitHub().list_releases()
+            items = [f"{r['tag_name']}  ({sum(a['size'] for a in r.get('assets', [])) / 1e6:.0f} MB"
+                     + (", pinned)" if r["tag_name"] == pinned else ")") for r in found]
+            self.events.put(("releases", items))
+            self.log(f"{len(items)} published map(s)" + (f"; pinned: {pinned}" if pinned else ""))
+
+        self.run_task("List published maps", work)
+
+    def start_publish(self):
+        if not messagebox.askokcancel(
+                "Publish map", "Upload the local map (database + routing tiles, ~640 MB) as a GitHub "
+                               "release of e39-rpi-maps, and pin it in map-release.json?"):
+            return
+
+        def work(settings):
+            def bytes_progress(name, done, total):
+                self.events.put(("progress", (done / total if total else 0,
+                                              f"{name}: {done / 1e6:.0f} / {total / 1e6:.0f} MB")))
+
+            manifest = release.publish(settings.output, REPO, log=self.log, progress=bytes_progress)
+            found = release.GitHub().list_releases()
+            self.events.put(("releases", [f"{r['tag_name']}" + (" (pinned)" if r["tag_name"] == manifest["tag"] else "")
+                                          for r in found]))
+
+        self.run_task("Publish map", work)
+
+    def start_release_action(self, action):
+        from .__main__ import fetch_published
+
+        tag = self.selected_tag()
+        if tag is None:
+            messagebox.showinfo("Map toolkit", "Choose a release first (Refresh lists them).")
+            return
+        stick = None
+        if action == "usb":
+            stick = filedialog.askdirectory(title="The USB stick (its mount point)")
+            if not stick:
+                return
+
+        def progress(fraction, text):
+            self.events.put(("progress", (fraction, text)))
+
+        def work(settings):
+            db = fetch_published(settings, tag, log=self.log, progress=progress)
+            if action == "swap":
+                if not settings.target:
+                    raise PushError("enter the device's host or IP")
+                live_swap(db, settings.target, settings.ssh_user, settings.ssh_password, log=self.log)
+            elif action == "usb":
+                copy_to_usb(db, stick, log=self.log, progress=progress)
+
+        self.run_task({"download": f"Download {tag}", "swap": f"Download + live swap {tag}",
+                       "usb": f"Download {tag} to a USB stick"}[action], work)
+
+    def start_usb(self, db):
+        stick = filedialog.askdirectory(title="The USB stick (its mount point)")
+        if not stick:
+            return
+
+        def work(settings):
+            copy_to_usb(db or settings.output, stick, log=self.log,
+                        progress=lambda f, t: self.events.put(("progress", (f, t))))
+
+        self.run_task("Copy the local map to a USB stick", work)
+
     # --- settings ----------------------------------------------------------
 
     def collect(self):
@@ -225,7 +324,7 @@ class ToolkitWindow:
             return
         self.busy = True
         self.cancel_requested.clear()
-        for b in (self.build_button, self.push_button, self.image_button):
+        for b in self.task_buttons():
             b.configure(state="disabled")
         self.log(f"--- {title}")
 
@@ -235,7 +334,7 @@ class ToolkitWindow:
                 self.events.put(("done", f"{title}: done"))
             except InterruptedError:
                 self.events.put(("done", f"{title}: cancelled"))
-            except (PushError, schema.InvalidMapDatabase, OSError, SystemExit) as exc:
+            except (PushError, schema.InvalidMapDatabase, release.ReleaseError, OSError, SystemExit) as exc:
                 self.events.put(("failed", f"{title} failed: {exc}"))
             except Exception:
                 self.log(traceback.format_exc())
@@ -286,6 +385,10 @@ class ToolkitWindow:
 
         self.run_task("Update image", work)
 
+    def task_buttons(self):
+        return [self.build_button, self.push_button, self.image_button, self.local_usb_button,
+                *self.release_buttons]
+
     def pump(self):
         try:
             while True:
@@ -295,13 +398,17 @@ class ToolkitWindow:
                     self.log_text.insert("end", data + "\n")
                     self.log_text.see("end")
                     self.log_text.configure(state="disabled")
+                elif kind == "releases":
+                    self.release_box.configure(values=data)
+                    if data and self.release_tag.get() not in data:
+                        self.release_tag.set(data[0])
                 elif kind == "progress":
                     fraction, text = data
                     self.progress.configure(value=fraction)
                     self.status.configure(text=text)
                 elif kind in ("done", "failed"):
                     self.busy = False
-                    for b in (self.build_button, self.push_button, self.image_button):
+                    for b in self.task_buttons():
                         b.configure(state="normal")
                     self.cancel_button.configure(state="disabled")
                     self.status.configure(text="")
