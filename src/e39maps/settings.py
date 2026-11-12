@@ -155,6 +155,31 @@ DATABASE_ROUTERS = ["e39maps.routers.MapDataRouter"]
 GRPC_BIND = os.environ.get("DJANGO_GRPC_BIND", "0.0.0.0:50051")
 GRPC_MAX_WORKERS = int(os.environ.get("DJANGO_GRPC_MAX_WORKERS", "4"))
 
+
+# --- Logging ----------------------------------------------------------------
+# Everything to stderr, which systemd puts in the journal. Django's default
+# only prints to the console with DEBUG on and mails errors otherwise, so on
+# the device (DEBUG off, no mail) warnings like "Forbidden (CSRF ...)" and
+# even 500 tracebacks went nowhere.
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "plain": {"format": "{levelname} {name}: {message}", "style": "{"},
+    },
+    "handlers": {
+        "stderr": {"class": "logging.StreamHandler", "formatter": "plain"},
+    },
+    "root": {"handlers": ["stderr"], "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO")},
+    "loggers": {
+        # Replaces Django's default handlers for "django" (debug-only console,
+        # mail_admins); django.server (runserver's request lines) keeps its own.
+        "django": {"handlers": ["stderr"], "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO"),
+                   "propagate": False},
+    },
+}
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
