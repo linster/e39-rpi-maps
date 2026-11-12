@@ -1,0 +1,20 @@
+{
+  "repo": "linster/e39-rpi-maps",
+  "tag": "map-20261112T203245Z",
+  "built_at": "2026-11-12T20:32:45Z",
+  "region": "Ottawa +530 km (London ON - Quebec City), Canada",
+  "poi_count": 55871,
+  "valhalla_version": "3.9.1",
+  "files": {
+    "database": {
+      "name": "e39maps-osm.sqlite",
+      "size": 12922880,
+      "sha256": "da6ec264cb1aa2a9f98269f8c516809dda1c005b57d702c02567324b6b60a76e"
+    },
+    "routing": {
+      "name": "e39maps-osm.routing.tar",
+      "size": 624599040,
+      "sha256": "afb017646992239233ca3fada6a0a7c8e2f2a3b180373e09c771463882529713"
+    }
+  }
+}

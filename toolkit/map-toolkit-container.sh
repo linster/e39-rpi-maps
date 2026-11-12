@@ -60,6 +60,19 @@ MOUNTS=(-v "$REPO:$REPO" -v "$CACHE:$CACHE" -v "$CONFIG:$CONFIG"
         -v "$CACHE/container-fontconfig:${CACHE%/*}/fontconfig")
 [ -n "$YOCTO" ] && [ -d "$YOCTO" ] && MOUNTS+=(-v "$YOCTO:$YOCTO")
 [ -d "$HOME/.ssh" ] && MOUNTS+=(-v "$HOME/.ssh:$HOME/.ssh:ro")
+# USB sticks ("Copy to USB stick"): where desktops mount them, so the folder
+# chooser sees them; rslave so a stick plugged in later shows up too.
+for media in "/media/$USER" "/run/media/$USER"; do
+    [ -d "$media" ] && MOUNTS+=(-v "$media:$media:rslave")
+done
+# ... and the folder given to the usb command, wherever it is.
+if [ "${1:-}" = usb ]; then
+    for arg in "${@:2}"; do
+        case "$arg" in -*) continue ;; esac
+        [ -d "$arg" ] && MOUNTS+=(-v "$(cd "$arg" && pwd):$(cd "$arg" && pwd)")
+        break
+    done
+fi
 
 # The window: this machine's X server (Wayland desktops run X apps through
 # XWayland, which sets DISPLAY too).
