@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 from django.core.exceptions import ImproperlyConfigured
 
@@ -71,6 +72,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "core",
+    "mapdata",
 ]
 
 MIDDLEWARE = [
@@ -109,27 +111,36 @@ TEMPLATES = [
 WSGI_APPLICATION = "e39maps.wsgi.application"
 
 
-# --- Database -----------------------------------------------------------
-# SQLite for now. When GeoDjango/OSM data lands, this is the main decision
-# point: SpatiaLite (light, read-mostly) vs. PostGIS (heavier, more capable).
-# See README.md.
+# --- Databases ----------------------------------------------------------
+# Two SQLite databases (see e39maps/routers.py):
+# - "default": writable state (users, admin, sessions, user-made POIs).
+#   Survives map updates. WAL etc. are set per connection in e39maps/sqlite.py:
+#   Django 5.0, the image's version, has no OPTIONS["init_command"].
+# - "mapdata": the read-only map database built by the map toolkit, opened
+#   in place and immutable (no writes, no -wal/-shm files next to it), so a
+#   map update just replaces that one file.
+#
+# DJANGO_DB_PATH is the old name of DJANGO_STATE_DB_PATH, still accepted.
+
+STATE_DB_PATH = os.environ.get(
+    "DJANGO_STATE_DB_PATH", os.environ.get("DJANGO_DB_PATH", BASE_DIR / "db.sqlite3"))
+MAP_DB_PATH = Path(os.environ.get(
+    "DJANGO_MAP_DB_PATH", BASE_DIR.parent / "output" / "db" / "e39maps-osm.sqlite"))
 
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": os.environ.get("DJANGO_DB_PATH", BASE_DIR / "db.sqlite3"),
-        "OPTIONS": {
-            "timeout": 20,
-            # WAL keeps readers from blocking on the writer, which matters for
-            # long-running gRPC stream readers on a single device.
-            "init_command": (
-                "PRAGMA journal_mode=WAL;"
-                "PRAGMA synchronous=NORMAL;"
-                "PRAGMA foreign_keys=ON;"
-            ),
-        },
-    }
+        "NAME": STATE_DB_PATH,
+        "OPTIONS": {"timeout": 20},
+    },
+    "mapdata": {
+        "ENGINE": "django.db.backends.sqlite3",
+        # Django opens SQLite with uri=True, so a file: URI works here.
+        "NAME": f"file:{quote(str(MAP_DB_PATH))}?mode=ro&immutable=1",
+    },
 }
+
+DATABASE_ROUTERS = ["e39maps.routers.MapDataRouter"]
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

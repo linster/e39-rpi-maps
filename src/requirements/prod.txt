@@ -1,2 +1,3 @@
 -r base.txt
-gunicorn==27.0.0
+# The image's version (meta-python, scarthgap).
+gunicorn==21.2.0

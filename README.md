@@ -5,7 +5,12 @@ Raspberry Pi running Yocto Linux.
 
 Current state: hello-world Django app with a styled page, a `/healthz`
 endpoint, and a production-shaped settings file (env-driven config, SQLite
-tuned for concurrent readers, WhiteNoise for static files).
+tuned for concurrent readers, WhiteNoise for static files), on **Django
+5.0.11** (the Yocto image's version) with **two databases**: read-only map
+data and writable state (see "Databases").
+
+The HMI will talk to this backend over **gRPC** for POIs and routes (routing:
+**Valhalla** through its Python bindings); map tiles stay plain HTTP.
 
 ## Quick start
 
@@ -35,8 +40,10 @@ python manage.py test
 ```
 src/
 ├── manage.py
-├── e39maps/        project package (settings, URLs, WSGI/ASGI entry points)
+├── e39maps/        project package (settings, URLs, WSGI/ASGI entry points,
+│                   database router, SQLite connection setup)
 ├── core/           hello-world app (view, template, static CSS, tests)
+├── mapdata/        models of the read-only map database (unmanaged)
 ├── requirements/   base.txt (runtime), prod.txt (+ gunicorn)
 └── .env.example    configuration reference
 output/db/          pre-populated map database (Git LFS) + ODbL attribution
@@ -63,12 +70,34 @@ important ones:
 | `DJANGO_SECRET_KEY` | dev-only value | **Required** when `DJANGO_DEBUG=0`. |
 | `DJANGO_SECRET_KEY_FILE` | unset | Read the secret key from this file instead of the environment. |
 | `DJANGO_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` | Comma-separated. |
-| `DJANGO_DB_PATH` | `src/db.sqlite3` | Put writable state on persistent storage. |
+| `DJANGO_STATE_DB_PATH` | `src/db.sqlite3` | Writable state database; put it on persistent storage. (`DJANGO_DB_PATH`: old name, still read.) |
+| `DJANGO_MAP_DB_PATH` | `output/db/e39maps-osm.sqlite` | Read-only map database, opened in place. |
 | `DJANGO_STATIC_ROOT` | `src/staticfiles` | Writable location for `collectstatic`. |
 | `DJANGO_HTTPS` | `0` | Set to `1` to enable HSTS and secure cookies. |
 
 `DJANGO_DEBUG=0` also enables WhiteNoise's compressed, hashed static storage,
 so run `collectstatic` as part of the build/install step.
+
+## Databases
+
+Two SQLite databases (`e39maps/settings.py`, `e39maps/routers.py`):
+
+| Alias | What | Lifetime |
+| --- | --- | --- |
+| `default` (**state**) | users, admin, sessions, user-made POIs | writable; lives in `/var/lib/e39maps` on the device and **survives map updates** |
+| `mapdata` (**map data**) | everything built from OSM by the map toolkit | read-only; opened in place as `file:...?mode=ro&immutable=1` (no writes, no `-wal`/`-shm` files), **replaced as a whole** on a map update |
+
+- Models of the `mapdata` app read from the map database. They're unmanaged:
+  the toolkit owns that schema, Django never migrates or writes it (a write
+  fails with "attempt to write a readonly database"). Relations across the two
+  databases aren't allowed; refer to map objects by id.
+- Every map database has a `e39maps_meta (key, value)` table with facts like
+  `schema_version`, `built_at` (ISO 8601, UTC) and `region`; `/healthz`
+  reports them (or why the map database can't be read: the app runs without
+  one).
+- Django 5.0 has no SQLite `OPTIONS["init_command"]` (5.1+), so WAL,
+  `synchronous=NORMAL` and foreign keys are set per connection in
+  `e39maps/sqlite.py`, on the state database only.
 
 ## Running in production (on the device)
 
@@ -131,8 +160,9 @@ preference:
 
 1. **OE packages** (`meta-python`): `python3-django`, `python3-gunicorn`,
    `python3-whitenoise` (if present). Zero extra build cost, but versions lag
-   upstream — pin the Django LTS that matches the image's Python (e.g. Python
-   3.12 + Django 5.2 LTS).
+   upstream. The app is pinned to the image's versions (Django 5.0.11,
+   asgiref 3.8.1, sqlparse 0.4.4, WhiteNoise 6.6.0, gunicorn 21.2.0 in
+   scarthgap's meta-python; `src/requirements/`), so no extra recipes.
 2. **Custom recipes** for anything missing, using `python_pep517` /
    `setuptools3` and the upstream sdist. Cross-compiled wheels are the
    exception, not the rule; pure-Python packages build in seconds.
@@ -218,7 +248,8 @@ Do the expensive work off-device:
 User=e39maps
 StateDirectory=e39maps
 Environment=DJANGO_DEBUG=0
-Environment=DJANGO_DB_PATH=/var/lib/e39maps/db.sqlite3
+Environment=DJANGO_STATE_DB_PATH=/var/lib/e39maps/state.sqlite3
+Environment=DJANGO_MAP_DB_PATH=/usr/share/e39rpi-maps/data/e39maps-osm.sqlite
 Environment=DJANGO_STATIC_ROOT=/var/lib/e39maps/static
 Environment=DJANGO_SECRET_KEY_FILE=/var/lib/e39maps/secret_key
 WorkingDirectory=/usr/share/e39rpi-maps

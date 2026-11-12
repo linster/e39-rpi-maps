@@ -27,6 +27,40 @@ read-only `/`.
 
 ---
 
+## Decisions since this was written (2026-11-12) - these win
+
+Parts of this document describe an earlier plan. Until it is rewritten
+together with the recipes (in `e39-rpi-yocto`, branch `claude-maps`), these
+decisions override anything below that disagrees:
+
+- **Django 5.0.11 from meta-python** (with its asgiref 3.8.1, sqlparse 0.4.4,
+  WhiteNoise 6.6.0, gunicorn 21.2.0): **no `python3-django_5.2.19.bb`**. The
+  app sets its SQLite PRAGMAs in a `connection_created` handler instead of
+  `init_command` (done: `src/e39maps/sqlite.py`).
+- **Two databases from day one** (done in the app: `DATABASES` `default` +
+  `mapdata`, `src/e39maps/routers.py`):
+  - read-only **map database**, opened in place from
+    `/usr/share/e39rpi-maps/data/` (`DJANGO_MAP_DB_PATH`), immutable;
+  - writable **state database** in `/var/lib/e39maps/`
+    (`DJANGO_STATE_DB_PATH`) for users, admin, sessions, user-made POIs.
+  Map updates replace only the map database; user content survives. So
+  **no first-boot data installer, no zstd, no `.dataset-version` marker**
+  (§8.3, §8.4 "v1 one writable DB" and the zstd parts of §8.2 are obsolete).
+- **Routing: Valhalla with its Python bindings**, called in-process from the
+  backend; routing tiles built off-device next to the map database.
+- **HMI interface:** gRPC for POIs and routes; tiles over plain HTTP
+  (pre-rendered raster tiles, later).
+- **Map toolkit** (GUI) in this repo: builds the map database and pushes it
+  to QEMU or a device over ssh (map data only; the state database is left
+  alone). `version.conf` on the device gets a map database timestamp.
+- **Data delivery:** Git LFS in this repo; if the files would exceed 2 GB, a
+  path on the build machine instead.
+- The image installs the maps packages only when `meta-e39rpi-maps` is in
+  `bblayers.conf` (the `meta-e39rpi-media` pattern), not via a bbappend that
+  is always active.
+
+---
+
 ## 0. TL;DR
 
 - Put the recipe in the existing `meta-e39rpi-maps` layer, not a new layer.

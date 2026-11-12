@@ -1,6 +1,9 @@
 import django
+from django.db import DatabaseError
 from django.http import JsonResponse
 from django.shortcuts import render
+
+from mapdata.models import MapMeta
 
 
 def index(request):
@@ -8,5 +11,11 @@ def index(request):
 
 
 def healthz(request):
-    """Cheap liveness probe for systemd / the Yocto image."""
-    return JsonResponse({"status": "ok"})
+    """Cheap liveness probe for systemd / the Yocto image. Also reports the
+    map database: its facts (built_at, region, ...), or why it can't be read.
+    A missing map database doesn't make the app unhealthy."""
+    try:
+        map_db = {"available": True, "meta": MapMeta.as_dict()}
+    except DatabaseError as exc:
+        map_db = {"available": False, "error": str(exc)}
+    return JsonResponse({"status": "ok", "map_db": map_db})
