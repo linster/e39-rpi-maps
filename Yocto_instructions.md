@@ -1,30 +1,49 @@
 # Yocto instructions for `e39-rpi-maps`
 
-Audience: the engineer/agent writing the BitBake recipe and image integration.
-This file is the contract between the Django app and the Yocto image. Read it
-before writing the recipe; update it when the app's runtime shape changes.
+Audience: the engineer/agent writing the BitBake recipe and image integration
+for the `e39-rpi-yocto` repository. This file is the contract between the
+Django app and the image. Update it when the app's runtime shape changes.
 
-Last updated against commit
-`370f62cd21b7f31acaf9d053dfe3240e09ab9a91` (the hello-world app commit).
+App commit this was written against:
+`370f62cd21b7f31acaf9d053dfe3240e09ab9a91`.
+
+Yocto facts checked against `~/e39-rpi-yocto`:
+
+| Item | Value |
+| --- | --- |
+| Release | Scarthgap 5.0.7 (`poky` submodule), Python 3.12 |
+| Distro | `e39rpi`, systemd, X11 + JWM |
+| Images | `e39rpi-hmi-image` (extends `e39rpi-base-image`) |
+| Machines | `raspberrypi4-64` (SD/WIC), `qemuarm64`, `qemux86-64` |
+| Rootfs | ext4, **writable**, grown to fill the card on first boot by `e39rpi-growroot` |
+| Rootfs slack | `IMAGE_ROOTFS_EXTRA_SPACE = "524288"` (512 MiB) |
+| Maps layer | `layers/meta-e39rpi-maps`, collection `e39rpimaps`, currently empty |
+| Source convention | git submodule at the top of `e39-rpi-yocto` + `externalsrc` (same as `e39-rpi` HMI) |
+
+The rootfs is **not** read-only. The `/var/lib` split is still used for state
+that must survive package upgrades, but you do not need to design around a
+read-only `/`.
 
 ---
 
 ## 0. TL;DR
 
-- Put the recipe in a new `meta-e39` layer.
-- Fetch this repo with `gitsm://` and a **pinned full `SRCREV`**; do not use
-  `AUTOREV`, and do not build from a git submodule checked into a layer.
-- Do **not** run `pip`, create a venv, or use a wheel on the target. The project
-  has no `pyproject.toml`; install the source tree to `/usr/share/e39maps` and
-  satisfy dependencies with OE packages.
-- Install two systemd units:
-  - `e39maps-init.service` (oneshot): generate secret, `migrate`,
-    `collectstatic`.
-  - `e39maps.service`: gunicorn serving `e39maps.wsgi:application` on port 8000.
-- Keep all writable state in `/var/lib/e39maps` (via `StateDirectory`); the
-  rootfs may be read-only.
-- Verify: `/healthz` returns `{"status": "ok"}`, `/` renders "Hello from
-  Django", `/admin/` returns 302, and the hashed CSS returns 200.
+- Put the recipe in the existing `meta-e39rpi-maps` layer, not a new layer.
+- Follow the project convention: add this repo as a git submodule of
+  `e39-rpi-yocto` and build it with `externalsrc`, exactly like
+  `e39rpi-hmi.bb` builds the `e39-rpi` submodule. Do not invent a `gitsm://`
+  recipe unless the human asks for a standalone/release build.
+- Install the app to `/usr/share/e39rpi-maps`; keep writable state in
+  `/var/lib/e39maps` (systemd `StateDirectory`).
+- Ship the pre-populated OSM database as a **separate `e39maps-data` package**
+  (compressed artifact + checksum), installed under
+  `/usr/share/e39rpi-maps/data/`. A first-boot oneshot installs it into
+  `/var/lib/e39maps/` (or opens it read-only in place).
+- Run Django as gunicorn on **port 8080** (8000 is MPD's HTTP stream).
+- Three systemd units: `e39maps-data.service` → `e39maps-init.service`
+  (`migrate` + `collectstatic`) → `e39maps.service` (gunicorn).
+- Do not run `pip` or `osm2pgsql` on the device; `collectstatic` runs once on
+  first boot. The DB artifact is built on the x86 host.
 
 ---
 
@@ -35,106 +54,169 @@ Last updated against commit
 | Git URL | `https://github.com/linster/e39-rpi-maps.git` |
 | Branch | `main` |
 | License | MPL-2.0 (`LICENSE`, md5 `f75d2927d3c1ed2414ef72048f5ad640`) |
-| Python | Requires >= 3.10; developed/tested on 3.12.3 |
+| Python | Requires >= 3.10; tested on 3.12.3 |
 | Django | 5.2.19 LTS (supports Python 3.10–3.13) |
 | WSGI entry point | `e39maps.wsgi:application` |
-| ASGI entry point | `e39maps.asgi:application` (unused so far) |
-| Management entry | `manage.py` (must be run with cwd = project root) |
+| Management entry | `manage.py` (run with cwd = project root) |
 | Runtime deps | `Django`, `whitenoise`; production adds `gunicorn` |
-| Packaging | No `pyproject.toml`/`setup.py`; it is a Django *project*, not a wheel |
+| Packaging | No `pyproject.toml`/`setup.py`; a Django *project*, not a wheel |
 
-Project layout (only these paths are needed at runtime):
+Runtime paths:
 
 ```
-manage.py
-e39maps/            settings.py, urls.py, wsgi.py, asgi.py
-core/               app: views, urls, templates, static, migrations
-requirements/       documentation/reference only (OE supplies the packages)
-LICENSE
+/usr/share/e39rpi-maps/          app source (manage.py, e39maps/, core/)
+/usr/share/e39rpi-maps/data/     read-only dataset + VERSION (e39maps-data)
+/var/lib/e39maps/                writable state (StateDirectory)
+/var/lib/e39maps/db.sqlite3      Django state DB (v1: the installed dataset)
+/var/lib/e39maps/data/osm.sqlite split read-only OSM DB (later)
+/var/lib/e39maps/static/         collectstatic output
+/etc/e39maps.env                 non-secret configuration
 ```
 
-Everything else (`.venv`, `db.sqlite3`, `staticfiles/`, `.git`) must be
-excluded from the package.
+### The app's configuration contract
 
-### Runtime contract
+All settings come from environment variables. Relevant to the recipe:
 
-The app reads all configuration from environment variables (see
-`.env.example`). Relevant to the recipe:
-
-| Variable | Recipe/runtime value |
+| Variable | Value on the device |
 | --- | --- |
 | `DJANGO_DEBUG` | `0` |
 | `DJANGO_SECRET_KEY_FILE` | `/var/lib/e39maps/secret_key` |
 | `DJANGO_ALLOWED_HOSTS` | device hostname/IP, e.g. `e39.local,localhost,127.0.0.1` |
 | `DJANGO_DB_PATH` | `/var/lib/e39maps/db.sqlite3` |
 | `DJANGO_STATIC_ROOT` | `/var/lib/e39maps/static` |
-| `DJANGO_HTTPS` | `0` unless TLS is terminated in front of gunicorn |
-| `DJANGO_BEHIND_PROXY` | `0` unless a reverse proxy sets `X-Forwarded-Proto` |
+| `DJANGO_HTTPS` | `0` (no TLS in the current image) |
+| `DJANGO_BEHIND_PROXY` | `0` |
 
-`DJANGO_DEBUG=0` without a secret key raises `ImproperlyConfigured` at startup.
-The app can read the key from `DJANGO_SECRET_KEY_FILE`, which is what the image
-should use so the key never lives in the read-only rootfs or in git.
+`DJANGO_DEBUG=0` without a key raises `ImproperlyConfigured`. Use
+`DJANGO_SECRET_KEY_FILE` so the key is generated on the device and never baked
+into the image.
 
-`DJANGO_DEBUG=0` also switches static file handling to WhiteNoise's
-`CompressedManifestStaticFilesStorage`. **The manifest must exist before the
-web service starts**, otherwise rendering `{% static %}` raises `ValueError`
-and the index page returns 500. This is why `collectstatic` runs in the init
-unit, ordered before the web unit.
-
----
-
-## 2. Ask the human before guessing
-
-If these are unknown, ask; they change the recipe:
-
-1. **Yocto release** (Scarthgap 5.0, Styhead 5.1, Walnascar 5.2, Whinlatter 5.3,
-   …). This determines Python version, `LAYERSERIES_COMPAT`, and whether
-   `SRCPV` still exists. If forced to assume, use Scarthgap and Python 3.12.
-2. **Pi model and RAM** (Pi Zero 2 W 512 MB vs Pi 4/5 1–8 GB). Affects
-   `MemoryMax` and whether SpatiaLite/PostGIS is viable.
-3. **Image name and hostname** (for `ALLOWED_HOSTS` and documentation).
-4. **Read-only rootfs?** If yes, the `/var/lib/e39maps` split below is mandatory.
-5. **Where the OSM data artifact will come from** (release asset vs separate
-   recipe). Do not put a multi-GB extract in this git repo.
-6. **gRPC implementation** (`grpcio` vs `grpclib`). This is not in the code yet;
-   do not add gRPC dependencies until the service exists.
+`DJANGO_DEBUG=0` also selects WhiteNoise's
+`CompressedManifestStaticFilesStorage`. The manifest must exist before gunicorn
+starts, or `{% static %}` raises `ValueError` and `/` returns 500. That is why
+`collectstatic` runs in the init unit before the web unit.
 
 ---
 
-## 3. Layer layout
+## 2. What is already in the Yocto tree
 
-```
-meta-e39/
-├── conf/
-│   └── layer.conf
-└── recipes-apps/
-    └── e39maps/
-        ├── e39maps_git.bb
-        └── files/
-            ├── e39maps.env
-            ├── e39maps.service
-            └── e39maps-init.service
+Use these; do not duplicate them:
+
+- `layers/meta-e39rpi-maps/conf/layer.conf` — collection `e39rpimaps`,
+  depends `e39rpibase e39rpigui`, `LAYERSERIES_COMPAT = "scarthgap"`.
+  It is already in `bblayers.conf`.
+- `layers/meta-e39rpi-gui/recipes-hmi/e39rpi-hmi/e39rpi-hmi.bb` — the pattern
+  to copy for `externalsrc`, `file://` units, `tmpfiles.d`, and systemd.
+- `layers/meta-e39rpi-base/recipes-core/e39rpi-growroot/` — first-boot root
+  partition growth. Order data installation after it.
+- `layers/meta-e39rpi-base/recipes-core/hmi-user/` — existing `hmi` user.
+  A dedicated `e39maps` system user is still recommended for the backend.
+- `meta-openembedded/meta-python` has: Django **5.0.11**, gunicorn 21.2.0,
+  whitenoise 6.6.0, grpcio 1.62.2, grpcio-tools 1.62.2.
+- `meta-openembedded/meta-oe` has: libspatialite **5.0.1**, GEOS 3.12.1,
+  PROJ 9.3.1. **GDAL is not present**; Django's `django.contrib.gis` app
+  imports GDAL at startup, so plan a geospatial layer (or a GDAL recipe) when
+  GeoDjango lands.
+- `poky/meta/files/common-licenses/ODbL-1.0` exists (md5
+  `498d26a501c10739d57fca1c9d80bbc2`).
+
+### Django version mismatch (important)
+
+`meta-python` ships Django 5.0.11, but the app uses
+`DATABASES["default"]["OPTIONS"]["init_command"]`, which Django added in 5.1.
+With 5.0.11 the SQLite backend passes `init_command` to `sqlite3.connect()` and
+fails with `TypeError`.
+
+Pick one:
+
+1. **Recommended:** add `python3-django_5.2.19.bb` to `meta-e39rpi-maps` by
+   copying `python3-django_5.0.11.bb`, changing `require python-django.inc`
+   to `require recipes-devtools/python/python-django.inc` (the inc lives in
+   meta-python), and updating the checksum. The upstream sdist is
+   `https://files.pythonhosted.org/packages/02/29/a487a108caa76430c8b616aa90a6d09cf431306112c14093e6f0a7454e17/django-5.2.19.tar.gz`
+   with sha256
+   `ad03d8abc51dbff95ebf34b27123cf0c26a3b62db7ba0cd520783686362533d1`.
+   `python-django.inc` already has `BBCLASSEXTEND = "native nativesdk"`.
+2. Use 5.0.11 and change the app to apply PRAGMAs via the
+   `connection_created` signal instead of `init_command`. Do not do this
+   silently; it is an app change.
+
+gunicorn 21.2.0 and whitenoise 6.6.0 are fine for the current code. If you
+package gunicorn 27 instead, add `--no-control-socket` to the unit: its default
+control socket is `/run/user/<uid>/gunicorn.ctl`, which a system user does not
+have.
+
+---
+
+## 3. Add the source as a submodule
+
+`e39-rpi-yocto` already vendors `e39-rpi` this way. Add this repo alongside it:
+
+```sh
+cd ~/e39-rpi-yocto
+git submodule add https://github.com/linster/e39-rpi-maps.git e39-rpi-maps
+git submodule update --init --recursive
 ```
 
-`conf/layer.conf` (adjust compat to the target release):
+Then in `layers/meta-e39rpi-maps/conf/layer.conf`:
 
 ```bitbake
-BBPATH .= ":${LAYERDIR}"
-BBFILES += "${LAYERDIR}/recipes-*/*/*.bb ${LAYERDIR}/recipes-*/*/*.bbappend"
+# The Django app source: the e39-rpi-maps git submodule at the top of this repo.
+# Override E39_MAPS_SRC in local.conf to build another checkout.
+E39_MAPS_SRC_DEFAULT := "${@os.path.normpath(d.getVar('LAYERDIR') + '/../../e39-rpi-maps')}"
 
-BBFILE_COLLECTIONS += "meta-e39"
-BBFILE_PATTERN_meta-e39 = "^${LAYERDIR}/"
-BBFILE_PRIORITY_meta-e39 = "10"
+# The recipes need meta-python (Django/gunicorn/whitenoise) and meta-oe
+# (libspatialite/GEOS/PROJ).
+LAYERDEPENDS_e39rpimaps = "e39rpibase e39rpigui meta-python openembedded-layer"
 
-LAYERSERIES_COMPAT_meta-e39 = "scarthgap styhead walnascar"
+# Remove this once the layer has recipes.
+BBFILE_PATTERN_IGNORE_EMPTY_e39rpimaps = "1"
 ```
 
-Add the layer to `bblayers.conf`, then add `e39maps` to the image with
-`IMAGE_INSTALL:append = " e39maps"`.
+The parent repo's commit pins the submodule commit, so the image is
+reproducible as long as the submodule pointer is committed. `externalsrc`
+builds uncommitted edits in the submodule, which is intended for development;
+do not ship an image built from a dirty submodule without recording it.
 
 ---
 
-## 4. Recipe skeleton
+## 4. Layer layout
+
+```
+meta-e39rpi-maps/
+├── conf/
+│   └── layer.conf
+└── recipes-maps/
+    ├── e39maps/
+    │   ├── e39maps_git.bb
+    │   └── files/
+    │       ├── e39maps.env
+    │       ├── e39maps.service
+    │       ├── e39maps-init.service
+    │       ├── e39maps-data.service
+    │       └── e39maps-install-data
+    └── e39maps-data/
+        └── e39maps-data_git.bb
+```
+
+Add a packagegroup (or a plain `IMAGE_INSTALL:append`) so
+`e39rpi-hmi-image` gets the app. Follow the media layer's conditional style if
+you want the maps layer to remain optional:
+
+```bitbake
+# layers/meta-e39rpi-maps/recipes-core/images/e39rpi-hmi-image.bbappend
+IMAGE_INSTALL:append = " packagegroup-e39rpi-maps"
+```
+
+QEMU port forwarding (add to the maps `layer.conf`; 8000 is MPD):
+
+```bitbake
+QB_SLIRP_OPT:append = ",hostfwd=tcp:127.0.0.1:8080-:8080,hostfwd=tcp:127.0.0.1:50051-:50051"
+```
+
+---
+
+## 5. App recipe skeleton
 
 ```bitbake
 SUMMARY = "Django/GeoDjango backend for e39-rpi-maps"
@@ -142,39 +224,46 @@ HOMEPAGE = "https://github.com/linster/e39-rpi-maps"
 LICENSE = "MPL-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=f75d2927d3c1ed2414ef72048f5ad640"
 
-SRC_URI = "gitsm://github.com/linster/e39-rpi-maps.git;branch=main;protocol=https \
-           file://e39maps.env \
-           file://e39maps.service \
-           file://e39maps-init.service"
-# Full 40-char SHA. Bump deliberately when the app changes; never AUTOREV.
-SRCREV = "370f62cd21b7f31acaf9d053dfe3240e09ab9a91"
-
-# On releases where SRCPV still exists you may use "0.1.0+git${SRCPV}".
-# On newer releases SRCPV is gone; "0.1.0+git" is fine.
 PV = "0.1.0+git"
-S = "${WORKDIR}/git"
 
-inherit systemd useradd
+# Build straight from the e39-rpi-maps git submodule (or E39_MAPS_SRC from
+# local.conf), like e39rpi-hmi.bb does for e39-rpi.
+E39_MAPS_SRC ?= "${E39_MAPS_SRC_DEFAULT}"
+EXTERNALSRC = "${E39_MAPS_SRC}"
+EXTERNALSRC_SYMLINKS = ""
+
+inherit externalsrc systemd useradd
+
+SRC_URI = " \
+    file://e39maps.env \
+    file://e39maps.service \
+    file://e39maps-init.service \
+    file://e39maps-data.service \
+    file://e39maps-install-data \
+"
 
 USERADD_PACKAGES = "${PN}"
 USERADD_PARAM:${PN} = "--system --home /var/lib/e39maps \
     --shell /sbin/nologin --user-group e39maps"
 
 do_install() {
-    install -d ${D}${datadir}/e39maps
+    install -d ${D}${datadir}/e39rpi-maps
     cp -R --no-preserve=ownership \
         ${S}/manage.py ${S}/e39maps ${S}/core \
-        ${D}${datadir}/e39maps/
+        ${D}${datadir}/e39rpi-maps/
 
     # Never ship local state or build artifacts.
-    find ${D}${datadir}/e39maps -type d -name '__pycache__' -prune -exec rm -rf {} +
-    find ${D}${datadir}/e39maps -name '*.py[co]' -delete
-    rm -rf ${D}${datadir}/e39maps/db.sqlite3* \
-           ${D}${datadir}/e39maps/staticfiles
+    find ${D}${datadir}/e39rpi-maps -type d -name '__pycache__' -prune -exec rm -rf {} +
+    find ${D}${datadir}/e39rpi-maps -name '*.py[co]' -delete
+    rm -rf ${D}${datadir}/e39rpi-maps/db.sqlite3* \
+           ${D}${datadir}/e39rpi-maps/staticfiles
 
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/e39maps.service ${D}${systemd_system_unitdir}/
     install -m 0644 ${WORKDIR}/e39maps-init.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${WORKDIR}/e39maps-data.service ${D}${systemd_system_unitdir}/
+
+    install -D -m 0755 ${WORKDIR}/e39maps-install-data ${D}${libexecdir}/e39maps-install-data
 
     install -d ${D}${sysconfdir}
     install -m 0644 ${WORKDIR}/e39maps.env ${D}${sysconfdir}/e39maps.env
@@ -183,18 +272,18 @@ do_install() {
 }
 
 FILES:${PN} += " \
-    ${datadir}/e39maps \
+    ${datadir}/e39rpi-maps \
+    ${libexecdir}/e39maps-install-data \
     ${systemd_system_unitdir}/e39maps.service \
     ${systemd_system_unitdir}/e39maps-init.service \
+    ${systemd_system_unitdir}/e39maps-data.service \
     ${sysconfdir}/e39maps.env \
 "
 CONFFILES:${PN} += "${sysconfdir}/e39maps.env"
 
-SYSTEMD_SERVICE:${PN} = "e39maps-init.service e39maps.service"
+SYSTEMD_SERVICE:${PN} = "e39maps-data.service e39maps-init.service e39maps.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
-# Verify exact Python module package names for the target release; OE splits
-# modules differently across releases. These are the expected providers.
 RDEPENDS:${PN} += " \
     python3-core \
     python3-json \
@@ -210,27 +299,17 @@ RDEPENDS:${PN} += " \
 "
 ```
 
-Notes:
+Verify module package names for scarthgap with
+`oe-pkgdata-util find-path '*/sqlite3/*.so'`; adjust if a module is folded into
+`python3-misc`.
 
-- `gitsm://` is correct even though the repo has no submodules today; it keeps
-  working if any are added later. Do not use `externalsrc` for production
-  builds.
-- If `python3-whitenoise` or `python3-gunicorn` is missing from the target
-  release's `meta-python`, add small `python_pep517` recipes. Use the PyPI
-  sdist and **real** `sha256sum` values; do not invent checksums.
-- If `meta-python` ships an older Django, add
-  `python3-django_5.2.19.bb` with `inherit python_pep517 python_setuptools_build_meta`
-  and `RDEPENDS:${PN} += "python3-asgiref python3-sqlparse"`. Django 5.2 needs
-  Python >= 3.10, so a Kirkstone (3.10) image is technically acceptable; check
-  that the packaged version is actually 5.2.x.
-- `python3-sqlite3` is the module package on most releases, but confirm with
-  `oe-pkgdata-util find-path '*/sqlite3/*.so'`. The same applies to
-  `python3-json`/`python3-logging`; if they are folded into `python3-misc` on
-  your release, depend on that instead.
+`python3-sqlite3` and `python3-core` are the expected names; `tzdata` is for
+`zoneinfo` (the app uses `TIME_ZONE = "UTC"`, but Django's timezone machinery
+still expects the database).
 
 ---
 
-## 5. Configuration file
+## 6. Configuration file
 
 `files/e39maps.env` (installed to `/etc/e39maps.env`):
 
@@ -244,22 +323,52 @@ DJANGO_HTTPS=0
 DJANGO_BEHIND_PROXY=0
 ```
 
-`ALLOWED_HOSTS` must include whatever name/IP clients use, or Django returns
-HTTP 400. Tell the user to edit this file on the device if the hostname differs.
+`ALLOWED_HOSTS` must include the name/IP clients use, or Django returns 400.
+Tell the user to edit this file if the hostname differs. It is a `CONFFILES`
+entry, so package upgrades preserve edits.
 
 ---
 
-## 6. systemd units
+## 7. systemd units and ordering
 
-### `e39maps-init.service`
+Order: **data → init → web**. All three run as `e39maps`, use the same
+`StateDirectory`, and read `/etc/e39maps.env`.
 
-Runs once per boot (cheap; idempotent) and before the web service. `migrate`
-and `collectstatic` are both idempotent.
+### `e39maps-data.service`
 
 ```ini
 [Unit]
-Description=e39-rpi-maps first-boot initialization
-After=local-fs.target
+Description=Install e39-rpi-maps OSM dataset
+After=local-fs.target e39rpi-growroot.service
+Before=e39maps-init.service
+# Skip cleanly when the optional e39maps-data package isn't installed.
+ConditionPathExists=/usr/share/e39rpi-maps/data/e39maps-osm.sqlite.zst
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=e39maps
+Group=e39maps
+StateDirectory=e39maps
+StateDirectoryMode=0750
+ExecStart=/usr/libexec/e39maps-install-data
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`After=e39rpi-growroot.service` matters: the root partition is grown on first
+boot, and the data installer needs the free space. If the dataset is mandatory
+for your image, add `Requires=e39maps-data.service` to `e39maps-init.service`;
+`ConditionPathExists` makes the data unit a clean no-op when the optional
+`e39maps-data` package is not installed.
+
+### `e39maps-init.service`
+
+```ini
+[Unit]
+Description=e39-rpi-maps database and static initialization
+After=local-fs.target e39maps-data.service
 Before=e39maps.service
 
 [Service]
@@ -270,7 +379,7 @@ Group=e39maps
 StateDirectory=e39maps
 StateDirectoryMode=0750
 EnvironmentFile=/etc/e39maps.env
-WorkingDirectory=/usr/share/e39maps
+WorkingDirectory=/usr/share/e39rpi-maps
 
 # Generate the secret once, mode 0600, on persistent storage.
 ExecStartPre=/bin/sh -c 'test -s /var/lib/e39maps/secret_key || { umask 077; python3 -c "import secrets; print(secrets.token_urlsafe(50))" > /var/lib/e39maps/secret_key; }'
@@ -282,8 +391,8 @@ ExecStart=/usr/bin/python3 manage.py collectstatic --noinput
 WantedBy=multi-user.target
 ```
 
-`StateDirectory=e39maps` creates `/var/lib/e39maps` owned by `e39maps` before
-`ExecStartPre`, so this works even with a read-only rootfs.
+Both tasks are idempotent. `StateDirectory=e39maps` creates
+`/var/lib/e39maps` owned by the user before `ExecStartPre` runs.
 
 ### `e39maps.service`
 
@@ -299,19 +408,17 @@ User=e39maps
 Group=e39maps
 StateDirectory=e39maps
 EnvironmentFile=/etc/e39maps.env
-WorkingDirectory=/usr/share/e39maps
+WorkingDirectory=/usr/share/e39rpi-maps
 
 ExecStart=/usr/bin/gunicorn e39maps.wsgi:application \
-    --bind 0.0.0.0:8000 \
+    --bind 0.0.0.0:8080 \
     --workers 1 --threads 2 \
     --max-requests 1000 --max-requests-jitter 100 \
     --access-logfile - --error-logfile -
-
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
 
-# Resource guard for a 512 MB–1 GB device. Tune after measuring.
 MemoryMax=192M
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -323,177 +430,369 @@ ReadWritePaths=/var/lib/e39maps
 WantedBy=multi-user.target
 ```
 
-Notes:
-
-- `Requires=` + `After=` on the init unit is deliberate: it prevents the
-  manifest-missing 500 described in §1.
-- `WorkingDirectory=/usr/share/e39maps` is what makes `e39maps.wsgi` and
-  `core` importable; gunicorn inserts the cwd on `sys.path`.
-- Verify the gunicorn path. If `python3-gunicorn` installs to `${bindir}` and
-  that is `/usr/bin`, the unit is correct; otherwise adjust.
-- Keep `--workers 1 --threads 2`. Each extra sync worker is a full Django
-  process (tens of MB). Do not raise this without measuring on the target.
+- **Port 8080**, not 8000: MPD's HTTP stream uses 8000 on this image.
+- `WorkingDirectory` is what makes `e39maps.wsgi` and `core` importable;
+  gunicorn inserts the cwd on `sys.path`.
+- `ProtectSystem=strict` is safe because all writes go to `/var/lib/e39maps`.
+  If you prefer not to harden the unit initially, keep `StateDirectory` anyway.
 - Logs go to the journal. Do not add file logging on the SD card.
-- If the rootfs is writable and you prefer not to use `ProtectSystem=strict`,
-  keep the `StateDirectory` and `ReadWritePaths` anyway; it documents intent.
 
 ---
 
-## 7. Static files: choose one strategy
+## 8. Getting a pre-populated database onto the device
 
-The app uses `CompressedManifestStaticFilesStorage` when `DJANGO_DEBUG=0`.
-Hashed filenames and `staticfiles.json` must exist at runtime.
+This is the main integration decision. There are two database roles:
 
-**Recommended: first-boot `collectstatic` (already in the init unit).**
+1. **OSM/map data** — large, derived from a Geofabrik extract, read-mostly.
+2. **Django state** — auth, sessions, admin, user-created POIs; small, must be
+   writable.
 
-- Pros: no build-host Django needed; no version-matching headaches; works with
-  read-only rootfs because output goes to `/var/lib/e39maps/static`.
-- Cons: a few seconds on first boot; static output is not in the image until
-  then. Acceptable on a Pi.
-- The init unit is ordered before the web unit, so requests never race it.
+The rootfs is writable, so the simplest working design is **one writable
+database** installed from a prebuilt artifact. For a read-only base plus user
+edits, see "Split databases" below.
 
-**Alternative: build-time `collectstatic`.**
+### 8.1 Recommended: build the DB on the host, ship it as a package
 
-- Requires Django + WhiteNoise runnable on the **build host** (native sysroot),
-  e.g. `python3-django-native` / `python3-whitenoise-native` recipes. OE does
-  not provide these by default; creating them is extra work.
-- Then run in `do_install` with `DJANGO_DEBUG=0`, a throwaway secret, and
-  `DJANGO_STATIC_ROOT=${D}${datadir}/e39maps/static`, and set the runtime
-  `DJANGO_STATIC_ROOT` to `/usr/share/e39maps/static`.
-- Only do this if boot time becomes a measured problem. Do not use a host venv
-  for it: that makes the build non-reproducible.
+Do **not** run `osm2pgsql`/import on the Pi. Build the database on the x86
+host (or CI) in an environment that matches the target's geospatial libraries:
 
-**Anti-pattern:** setting `DJANGO_DEBUG=1` in production to avoid the manifest.
-It exposes debug pages and changes static handling. Don't.
+| Library | Version in the image |
+| --- | --- |
+| libspatialite | 5.0.1 |
+| GEOS | 3.12.1 |
+| PROJ | 9.3.1 |
+| SQLite | 3.45.3 |
+| Python | 3.12 |
 
----
+SpatiaLite is the compatibility risk: a database created with a newer
+`libspatialite` may not open or may try to upgrade metadata on the device.
+Build with 5.0.1 (e.g. a Debian/Ubuntu container that has it), and record the
+versions in the artifact's `VERSION`/manifest.
 
-## 8. Database and OSM data
-
-Current state: one SQLite database for Django's own tables (auth, sessions,
-admin) plus future app models. It is created by `migrate` in the init unit at
-`/var/lib/e39maps/db.sqlite3` and uses WAL mode.
-
-- Never package `db.sqlite3` from the source tree; it is gitignored and local.
-- Migrations ship with the source tree; the init unit applies them.
-- SD-card wear: WAL is fine for a small state DB. Keep logs off the card.
-- Future GeoDjango: switch `DATABASES` to
-  `django.contrib.gis.db.backends.spatialite`, and add
-  `RDEPENDS:${PN} += "libspatialite geos proj gdal"` plus the Python GIS
-  module. Validate with `SELECT spatialite_version();` and
-  `python3 -c "from django.contrib.gis import gdal"` on the target.
-- OSM dataset: keep it in a **separate recipe/artifact** (e.g.
-  `e39maps-data`), not in this repo and not in this package. Import a regional
-  Geofabrik extract on the x86 build host; never run `osm2pgsql`
-  on the Pi.
-- Prefer read-only/immutable access for the OSM database and keep only mutable
-  state in `/var/lib/e39maps`. The current settings unconditionally set
-  `journal_mode=WAL`; a read-only SpatiaLite dataset will need a second
-  `DATABASES` alias or a settings tweak when that work lands. Do not force WAL
-  onto a file on read-only media.
-- Watch image size: a regional extract can be hundreds of MB. Put it on the
-  data partition or ship it as a compressed artifact, not in the rootfs.
-
----
-
-## 9. gRPC (not implemented yet)
-
-The repository does not contain gRPC code yet. When it lands:
-
-- Prefer `python3-grpcio` from `meta-python`. If absent, a custom recipe is a
-  large C++ build; budget for it and use system libraries, e.g.
-  `GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1`,
-  `GRPC_PYTHON_BUILD_SYSTEM_ZLIB=1`,
-  `GRPC_PYTHON_BUILD_WITH_CYTHON=1`. Build on the x86 host only.
-- Generate `*_pb2.py` / `*_pb2_grpc.py` in CI and commit them. Do not run
-  `grpcio-tools` on the device.
-- Run the server as `e39maps-grpc.service` (separate process, port 50051, own
-  `MemoryMax`, same `User`, `StateDirectory`, and `EnvironmentFile`). Add
-  `Requires=e39maps-init.service` and `After=` it.
-- `grpclib` (pure Python) is the fallback if `grpcio` packaging is too costly;
-  benchmark before choosing it.
-- Do not add these dependencies or the unit until the management command
-  (e.g. `manage.py run_grpc_server`) actually exists.
-
----
-
-## 10. Build and acceptance checks
-
-Build:
+Before packaging:
 
 ```sh
-bitbake e39maps
-oe-pkgdata-util list-pkg-files -p e39maps
-bitbake core-image-<image>
+# In the build container, after the import:
+python manage.py migrate                 # if the artifact includes Django tables
+sqlite3 osm.sqlite "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; ANALYZE;"
+sqlite3 osm.sqlite "PRAGMA integrity_check;"   # must print "ok"
+rm -f osm.sqlite-wal osm.sqlite-shm
+zstd -19 -T0 -o e39maps-osm-<region>-<date>.sqlite.zst osm.sqlite
+sha256sum e39maps-osm-<region>-<date>.sqlite.zst
 ```
 
-On the target (or `runqemu`):
+Also ship:
+
+- `VERSION` — e.g. `2026-11-01.<git-sha>.<schema-version>`; the installer uses
+  it to decide whether to replace the installed DB.
+- `ATTRIBUTION.txt` — "© OpenStreetMap contributors, ODbL 1.0" plus the
+  license text/link. The OSM data is **ODbL-1.0**, not MPL-2.0.
+
+Do not put a multi-hundred-MB artifact in git. Publish it as a release asset
+or on an artifact server and reference it from the data recipe.
+
+### 8.2 `e39maps-data` recipe
+
+```bitbake
+SUMMARY = "Pre-populated OSM/SpatiaLite database for e39-rpi-maps"
+HOMEPAGE = "https://github.com/linster/e39-rpi-maps"
+LICENSE = "ODbL-1.0"
+LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/ODbL-1.0;md5=498d26a501c10739d57fca1c9d80bbc2"
+
+# Replace with the real artifact URL and checksum. Keep the dataset version in
+# PV so a new artifact is a package upgrade.
+PV = "2026-11-01"
+SRC_URI = "https://example.invalid/e39maps-osm-<region>-${PV}.sqlite.zst;downloadfilename=e39maps-osm.sqlite.zst;name=data \
+           file://ATTRIBUTION.txt"
+SRC_URI[data.sha256sum] = "<sha256 of the .zst>"
+
+S = "${WORKDIR}"
+
+inherit allarch
+
+do_install() {
+    install -d ${D}${datadir}/e39rpi-maps/data
+    install -m 0644 ${WORKDIR}/e39maps-osm.sqlite.zst ${D}${datadir}/e39rpi-maps/data/
+    echo "${PV}" > ${D}${datadir}/e39rpi-maps/data/VERSION
+    chmod 0644 ${D}${datadir}/e39rpi-maps/data/VERSION
+    install -m 0644 ${WORKDIR}/ATTRIBUTION.txt ${D}${datadir}/e39rpi-maps/data/
+}
+
+FILES:${PN} = "${datadir}/e39rpi-maps/data"
+RDEPENDS:${PN} = "zstd"
+```
+
+For local development, override `SRC_URI`/`E39_MAPS_DATA_SRC` to a `file://`
+path or use `devtool`; do not commit the artifact to the layer. Put
+`ATTRIBUTION.txt` in the recipe's `files/` directory (it is not part of the
+large artifact).
+
+### 8.3 First-boot installer
+
+`files/e39maps-install-data` (installed to `/usr/libexec/e39maps-install-data`):
 
 ```sh
-systemctl status e39maps-init.service e39maps.service
-journalctl -u e39maps-init.service -u e39maps.service --no-pager
-curl -fsS http://127.0.0.1:8000/healthz          # {"status": "ok"}
-curl -fsS http://127.0.0.1:8000/ | grep "Hello from Django"
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/admin/   # 302
-ls -l /var/lib/e39maps/                          # db, secret_key, static/
-test ! -e /usr/share/e39maps/db.sqlite3          # no local state packaged
-test ! -d /usr/share/e39maps/.venv               # no venv packaged
+#!/bin/sh
+set -eu
+
+src=/usr/share/e39rpi-maps/data/e39maps-osm.sqlite.zst
+dir=/var/lib/e39maps
+dst="$dir/db.sqlite3"
+marker="$dir/.dataset-version"
+want="$(cat /usr/share/e39rpi-maps/data/VERSION)"
+
+if [ -f "$dst" ] && [ -f "$marker" ] && [ "$(cat "$marker")" = "$want" ]; then
+    echo "dataset $want already installed"
+    exit 0
+fi
+
+mkdir -p "$dir"
+
+# Refuse to start if the decompressed DB plus a temp copy cannot fit. zstd -l
+# prints the uncompressed size as a number + unit; convert to bytes. Keep a
+# 10% margin.
+need="$(zstd -l "$src" | awk 'NR == 2 {
+    mult = 1
+    if ($6 == "KiB") mult = 1024
+    else if ($6 == "MiB") mult = 1024 * 1024
+    else if ($6 == "GiB") mult = 1024 * 1024 * 1024
+    printf "%.0f", $5 * mult
+}')"
+avail="$(df -Pk "$dir" | awk 'NR==2 {print $4 * 1024}')"
+if [ -n "$need" ] && [ "$need" -gt 0 ] && [ "$avail" -lt $((need + need / 10)) ]; then
+    echo "not enough space: need ~$need bytes, have $avail" >&2
+    exit 1
+fi
+
+tmp="$dst.tmp"
+zstd -d -q -f -o "$tmp" "$src"
+chmod 0640 "$tmp"
+
+# Cheap sanity check. immutable=1 keeps SQLite from creating -wal/-shm files
+# for a database that is only being read.
+python3 - "$tmp" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro&immutable=1", uri=True)
+result = con.execute("PRAGMA integrity_check").fetchone()[0]
+if result != "ok":
+    sys.exit("integrity check failed: " + result)
+PY
+
+mv -f "$tmp" "$dst"
+echo "$want" > "$marker"
+echo "installed dataset $want"
+```
+
+Notes:
+
+- The installer runs as `e39maps`, so the extracted file is already owned by
+  the right user; no `chown` is needed. (The `tmpfiles.d` variant runs as root
+  and needs the `Z` line.)
+- `mv` within the same directory is atomic. On a dataset update this replaces
+  the old DB; if you need rollback, keep `db.sqlite3.old` (costs one extra copy
+  on the card).
+- Do not ship `-wal`/`-shm` files. If the app uses WAL, they are created at
+  runtime.
+- If the dataset is small (tens of MB), the simpler `tmpfiles.d` pattern used
+  by the HMI is enough:
+
+  ```ini
+  # Alternative layout: the data package ships an uncompressed
+  # default-data/db.sqlite3 instead of the .zst.
+  C /var/lib/e39maps/data - - - - /usr/share/e39rpi-maps/default-data
+  Z /var/lib/e39maps/data - e39maps e39maps -
+  ```
+
+  `C` copies only when the destination does not exist, so it does not handle
+  dataset updates. It also means `DJANGO_DB_PATH` must point into that
+  subdirectory (e.g. `/var/lib/e39maps/data/db.sqlite3`). Use the
+  version-aware installer for anything that changes.
+
+### 8.4 One DB or two?
+
+**v1 (recommended): one writable DB.**
+
+- Install the artifact to `/var/lib/e39maps/db.sqlite3`.
+- `migrate` in the init unit applies any app migrations.
+- Admin can edit everything.
+- Downside: installing a new dataset **overwrites admin edits**. Treat OSM
+  data as regenerable and keep user-created data in a separate DB before that
+  becomes a problem.
+
+**Later: split read-only OSM base + writable state.**
+
+- Open the base DB in place, read-only:
+  `NAME = "file:/usr/share/e39rpi-maps/data/osm.sqlite?mode=ro&immutable=1"`.
+  Django passes `uri=True` to SQLite, so URI filenames work.
+- Omit `init_command` for that alias. `PRAGMA journal_mode=WAL` fails on a
+  read-only database; the current `default` settings include it.
+- Add a `DATABASE_ROUTERS` entry routing OSM models to the `osm` alias and
+  auth/admin/user models to `default`.
+- No cross-database joins. Keep queries within one alias.
+- SpatiaLite tables live in the read-only DB; `InitSpatialMetaData` must have
+  run when the artifact was built. Django's SpatiaLite backend checks
+  `geometry_columns` on connect and only initializes when it is empty.
+- Updates become a package upgrade of `e39maps-data` (atomic at the file
+  level), and user edits survive.
+
+Do not attempt the split until there is an actual OSM model and router; the
+single-DB path is much less code for the hello-world stage.
+
+### 8.5 Alternatives (and why not)
+
+- **Import `.osm.pbf` on first boot:** slow, RAM-hungry, needs `osm2pgsql` in
+  the image, and writes heavily to the SD card. Don't.
+- **Download the DB on first boot:** viable as an *update* mechanism, but adds
+  a network dependency and failure modes to initial provisioning. For an
+  in-car device, ship the dataset in the image.
+- **USB stick or second partition:** use if the dataset outgrows the rootfs.
+  The current WIC layout is boot + root only; a data partition needs a custom
+  `.wks`, an fstab entry, and a mount unit. Not needed for a regional extract
+  that fits in the rootfs.
+
+### 8.6 Space budget
+
+`IMAGE_ROOTFS_EXTRA_SPACE` is 512 MiB, and the card grows to fill the SD on
+first boot. The **image** still has to contain the compressed artifact, and
+first boot needs room for the decompressed DB plus a temp copy. A regional
+extract that compresses to a few hundred MB is fine on a 16 GB card; a
+multi-GB dataset is not. Measure the artifact before committing to this
+approach.
+
+---
+
+## 9. Static files
+
+Keep first-boot `collectstatic` into `/var/lib/e39maps/static`. It is a few
+seconds once, the rootfs is writable, and it avoids needing Django and
+WhiteNoise runnable on the build host.
+
+`python-django.inc` does set `BBCLASSEXTEND = "native nativesdk"`, so a
+build-time `collectstatic` is possible with `python3-django-native`. It would
+also need a native WhiteNoise (not defined in the pinned meta-python) or a
+settings switch to plain `StaticFilesStorage`. Not worth it unless boot time
+becomes a measured problem.
+
+Do not set `DJANGO_DEBUG=1` in production to avoid the manifest.
+
+---
+
+## 10. GeoDjango and gRPC
+
+**GeoDjango** (not in the app yet):
+
+- `RDEPENDS:${PN} += "libspatialite geos proj"` when the SpatiaLite backend
+  lands. `django.contrib.gis` imports GDAL at startup (its system check), so
+  add GDAL too — via a geospatial layer or a custom recipe; GDAL is not in the
+  pinned layers. Ask before adding a new layer.
+- Set `SPATIALITE_LIBRARY_PATH` only if `find_library("spatialite")` fails on
+  the target.
+- The image's `libspatialite` 5.0.1 must match the version used to build the
+  DB artifact.
+
+**gRPC** (not in the app yet):
+
+- `python3-grpcio` 1.62.2 and `python3-grpcio-tools` 1.62.2 are in
+  meta-python; no custom build is needed initially.
+- Generate `*_pb2.py`/`*_pb2_grpc.py` with the matching `grpcio-tools` and
+  commit them; do not run codegen on the device.
+- Run it as a separate `e39maps-grpc.service` (port 50051, same user/env,
+  `Requires=e39maps-init.service`), with its own `MemoryMax`. Do not embed it
+  in the gunicorn process.
+- Do not add the unit until the management command exists.
+
+---
+
+## 11. Build and acceptance checks
+
+```sh
+cd ~/e39-rpi-yocto
+source setup-env                      # or the usual oe-init-build-env
+bitbake e39maps e39maps-data
+oe-pkgdata-util list-pkg-files -p e39maps
+bitbake e39rpi-hmi-image
+```
+
+On the target or `runqemu`:
+
+```sh
+systemctl status e39maps-data.service e39maps-init.service e39maps.service
+journalctl -u e39maps-data.service -u e39maps-init.service -u e39maps.service --no-pager
+
+curl -fsS http://127.0.0.1:8080/healthz        # {"status": "ok"}
+curl -fsS http://127.0.0.1:8080/ | grep "Hello from Django"
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/admin/   # 302
+ls -l /var/lib/e39maps/                        # db, secret_key, static
+test ! -e /usr/share/e39rpi-maps/db.sqlite3    # no local state packaged
+test ! -d /usr/share/e39rpi-maps/.venv         # no venv packaged
 systemctl show -p MemoryCurrent e39maps.service
 ```
 
 Also verify:
 
-- The CSS URL from the rendered page returns 200 and a hashed filename
-  (e.g. `/static/core/site.<hash>.css`).
+- The rendered CSS URL is hashed (`/static/core/site.<hash>.css`) and returns
+  200.
 - `/var/lib/e39maps/secret_key` is mode `0600`.
-- A reboot does not regenerate the secret key and does not fail the init unit.
-- `DJANGO_DEBUG=0` and `DJANGO_ALLOWED_HOSTS` match how clients reach the box.
+- A reboot does not regenerate the key and does not rerun the data installer
+  when `VERSION` is unchanged.
+- Bumping `e39maps-data`'s `PV` replaces the DB on the next boot and logs it.
+- `DJANGO_ALLOWED_HOSTS` matches how clients reach the device.
 
-`python3 manage.py check --deploy` with `DJANGO_HTTPS=1` should be clean. With
-plain HTTP (`DJANGO_HTTPS=0`) expect four warnings (`W004`, `W008`, `W012`,
-`W016`); that is intentional for a LAN device without TLS. Do not enable HSTS
-on plain HTTP.
+`manage.py check --deploy` with `DJANGO_HTTPS=1` should be clean. With plain
+HTTP expect `W004`, `W008`, `W012`, `W016`; that is intentional for the LAN
+device. Do not enable HSTS on plain HTTP.
 
 ---
 
-## 11. Pitfalls checklist
+## 12. Pitfalls checklist
 
-- [ ] `gitsm://`, not `git://`, and a full pinned `SRCREV`.
+- [ ] Add the repo as a **submodule** and use `externalsrc`, matching
+      `e39rpi-hmi.bb`; don't introduce `gitsm` unless asked.
+- [ ] `E39_MAPS_SRC_DEFAULT` points at `<yocto-root>/e39-rpi-maps`.
 - [ ] No `pip`, venv, or `pip bundle` on the target.
-- [ ] `cp --no-preserve=ownership` (build runs as root; files must be root-owned).
+- [ ] `cp --no-preserve=ownership` (build runs as root).
 - [ ] Remove `__pycache__`, `*.pyc`, `db.sqlite3*`, `staticfiles/` from `${D}`.
-- [ ] `WorkingDirectory=/usr/share/e39maps` on both units.
-- [ ] Init unit runs before web unit (`Requires` + `After`).
-- [ ] Secret generated at first boot, never baked into the image.
+- [ ] `WorkingDirectory=/usr/share/e39rpi-maps` on init and web units.
+- [ ] Ordering: data → init → web (`After`; web `Requires` init).
+- [ ] Secret generated at first boot, never baked in.
 - [ ] `DJANGO_ALLOWED_HOSTS` includes the device hostname/IP.
-- [ ] Static output under `/var/lib/e39maps/static`, not the read-only rootfs.
-- [ ] `MemoryMax` set; one gunicorn worker.
-- [ ] Logs to journald, not files.
-- [ ] Do not add gRPC/GIS dependencies before that code exists.
-- [ ] Python module package names verified for the chosen Yocto release.
+- [ ] Port **8080**; 8000 belongs to MPD.
+- [ ] One gunicorn worker, `MemoryMax` set.
+- [ ] Dataset is a separate `e39maps-data` package, ODbL-1.0, checksummed.
+- [ ] Build the dataset with libspatialite **5.0.1** to match the image.
+- [ ] Install dataset after `e39rpi-growroot.service`; check free space.
+- [ ] Installed DB is owned by `e39maps` (the installer runs as that user; the
+      `tmpfiles.d` variant uses the `Z` line); no `-wal`/`-shm` in the artifact.
+- [ ] Don't ship users/sessions/secret key in the DB.
+- [ ] If Django stays at 5.0.11, fix the `init_command` incompatibility.
+- [ ] Verify Python module package names for scarthgap.
+- [ ] Don't add gRPC/GDAL deps before the code exists.
 
 ---
 
-## 12. Useful commands
+## 13. Useful commands
 
 ```sh
-git -C /path/to/e39-rpi-maps rev-parse HEAD     # SRCREV to pin
-md5sum /path/to/e39-rpi-maps/LICENSE            # LIC_FILES_CHKSUM
+# In the app repo
+git rev-parse HEAD                              # submodule commit to pin
+md5sum LICENSE                                  # LIC_FILES_CHKSUM
+
+# In the Yocto repo
+git submodule status
 bitbake-layers show-recipes 'python3-*' | grep -E 'django|gunicorn|whitenoise|grpcio'
 oe-pkgdata-util find-path '*/django/__init__.py'
 oe-pkgdata-util list-pkg-files python3-django | head -40
-bitbake -e e39maps | grep -E '^(RDEPENDS|FILES|SYSTEMD_SERVICE)'
+bitbake -e e39maps | grep -E '^(RDEPENDS|FILES|SYSTEMD_SERVICE|EXTERNALSRC)'
 devtool modify e39maps                          # local iteration only
 ```
 
 ---
 
-## 13. Current limitations (do not paper over)
+## 14. Current limitations (do not paper over)
 
-- No GeoDjango, no SpatiaLite/PostGIS, no OSM models or import yet.
+- No GeoDjango models, SpatiaLite backend, or OSM import yet.
 - No gRPC service, generated stubs, or `run_grpc_server` command yet.
 - No custom user model; admin uses Django's default.
-- No CI, no `pyproject.toml`, no versioned release artifact yet. If the project
-  becomes a wheel later, revisit the recipe and install into
-  `${PYTHON_SITEPACKAGES_DIR}` instead of `${datadir}`; until then, source-tree
-  installation is intentional and simplest.
+- No `pyproject.toml`; source-tree installation is intentional for now.
+- The app is pinned to Django 5.2.19, while the pinned meta-python has 5.0.11.
+  Resolve that before building (see §2).

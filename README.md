@@ -69,7 +69,7 @@ export DJANGO_ALLOWED_HOSTS=e39.local
 python manage.py migrate
 python manage.py collectstatic --noinput
 gunicorn e39maps.wsgi:application \
-  --bind 0.0.0.0:8000 \
+  --bind 0.0.0.0:8080 \
   --workers 1 --threads 2 \
   --max-requests 1000 --max-requests-jitter 100 \
   --access-logfile - --error-logfile -
@@ -82,8 +82,9 @@ and each one costs tens of MB of RSS. Tune only after measuring on the target.
 
 ## Packaging plan for the Raspberry Pi / Yocto
 
-> The concrete recipe contract (SRCREV, unit files, dependency names,
-> acceptance checks) lives in [`Yocto_instructions.md`](Yocto_instructions.md).
+> The concrete recipe contract (submodule layout, unit files, dependency
+> names, database provisioning, acceptance checks) lives in
+> [`Yocto_instructions.md`](Yocto_instructions.md).
 
 The guiding constraint is that the Pi has little RAM (512 MB–2 GB), slow
 storage (SD card), and limited CPU. Everything below is chosen to avoid
@@ -91,21 +92,23 @@ running heavy services and to avoid doing expensive work on the device.
 
 ### 1. How the recipe gets the code
 
-Keep this repository standalone and let the recipe fetch it; don't rely on a
-git submodule inside a layer for the actual build (submodules are awkward for
-BitBake reproducibility, and `externalsrc` should stay a dev-only shortcut).
+This repository is a **git submodule of `e39-rpi-yocto`**, and the recipe
+builds it with `externalsrc` — the same pattern `e39rpi-hmi.bb` uses for the
+`e39-rpi` HMI. Add it at the top of the Yocto repo:
 
-```bitbake
-SRC_URI = "gitsm://github.com/<you>/e39-rpi-maps.git;branch=main;protocol=https"
-SRCREV = "<commit sha>"
+```sh
+cd ~/e39-rpi-yocto
+git submodule add https://github.com/linster/e39-rpi-maps.git e39-rpi-maps
 ```
 
-`gitsm://` recursively fetches this repo's own submodules if/when we add any.
-Pin `SRCREV`; never build a moving branch. For local iteration, a
-`devtool modify e39-rpi-maps` workflow beats committing a submodule pointer.
+Then set `E39_MAPS_SRC_DEFAULT` in the maps layer's `layer.conf` to
+`<yocto-root>/e39-rpi-maps`. The parent repo's commit pins the submodule
+commit, so the image is reproducible; `externalsrc` also picks up uncommitted
+edits, which is intended for development only. `devtool modify e39maps` works
+for local iteration.
 
-The project does not need to become a PyPI package. A simple recipe can copy
-the source tree to `${datadir}/e39maps` and depend on OE-provided Python
+The project does not need to become a PyPI package. A simple recipe copies the
+source tree to `${datadir}/e39rpi-maps` and depends on OE-provided Python
 packages. If we later want an installable wheel, add a `pyproject.toml` and
 use the PEP 517 / `python_setuptools_build_meta` classes.
 
@@ -129,16 +132,18 @@ size and license manifest stay accurate.
 
 ### 3. Static files and the web server
 
-- Run `collectstatic` at **image build time** in `do_install`, writing to
-  `${D}${datadir}/e39maps/static`, then set `DJANGO_STATIC_ROOT` at runtime.
-  Hashed filenames are generated once on the build host, not on the Pi.
+- Run `collectstatic` on first boot into `/var/lib/e39maps/static` (the init
+  systemd unit). The image's `meta-python` has no native WhiteNoise, so
+  build-time collection would need extra native recipes; first boot costs a
+  few seconds once. Hashed filenames are generated then.
 - Serve static files with **WhiteNoise from the gunicorn process**. That
   avoids nginx: one less process, roughly 5–15 MB of RAM saved, and no
   separate config to maintain. If we later need TLS or caching, put a small
   reverse proxy in front, but don't add it by default.
-- The root filesystem can be read-only. Keep the SQLite DB, WAL files and any
-  uploads in `/var/lib/e39maps` (a `systemd` `StateDirectory`), not next to the
-  code.
+- The `e39-rpi` image's rootfs is writable ext4 and grows to fill the SD card
+  on first boot, but state still belongs in `/var/lib/e39maps` (a `systemd`
+  `StateDirectory`), not next to the code, so package upgrades and dataset
+  updates don't touch it.
 
 ### 4. Database and OSM data
 
@@ -157,11 +162,19 @@ Do the expensive work off-device:
 
 - Import a **regional OSM extract** (Geofabrik `.osm.pbf`), not the planet.
 - Run `osm2pgsql`/import on the x86 build host, then ship the resulting
-  database (or a compressed artifact unpacked on first boot) as part of the
-  image. Importing on a Pi is slow and can exhaust RAM.
+  database as a **separate `e39maps-data` package**: a zstd-compressed SQLite
+  file with a checksum, installed read-only under
+  `/usr/share/e39rpi-maps/data/`, and installed into `/var/lib/e39maps/` by a
+  first-boot oneshot. Importing on a Pi is slow and can exhaust RAM.
+- Build the artifact with the image's library versions (`libspatialite` 5.0.1,
+  GEOS 3.12.1, PROJ 9.3.1) — a SpatiaLite file from a newer library may not
+  open on the device.
+- OSM-derived data is **ODbL-1.0**, not MPL-2.0; ship the attribution notice
+  with the artifact.
 - If the dataset is read-only, open it with SQLite `immutable=1` / read-only
   mode and put only the mutable admin/state DB in `/var/lib`. Avoid WAL churn
-  on the SD card for data that never changes.
+  on the SD card for data that never changes. (The first iteration can use one
+  writable DB; see `Yocto_instructions.md` §8 for the split.)
 - Keep the prebuilt DB out of the git repo; publish it as a release artifact
   or a separate BitBake `SRC_URI` with its own checksum.
 
@@ -185,15 +198,17 @@ Do the expensive work off-device:
 ### 6. Runtime shape on the image
 
 ```ini
-# /lib/systemd/system/e39maps.service (sketch)
+# /usr/lib/systemd/system/e39maps.service (sketch)
 [Service]
 User=e39maps
 StateDirectory=e39maps
 Environment=DJANGO_DEBUG=0
 Environment=DJANGO_DB_PATH=/var/lib/e39maps/db.sqlite3
-Environment=DJANGO_STATIC_ROOT=/usr/share/e39maps/static
+Environment=DJANGO_STATIC_ROOT=/var/lib/e39maps/static
+Environment=DJANGO_SECRET_KEY_FILE=/var/lib/e39maps/secret_key
+WorkingDirectory=/usr/share/e39rpi-maps
 ExecStart=/usr/bin/gunicorn e39maps.wsgi:application \
-  --bind 0.0.0.0:8000 --workers 1 --threads 2 \
+  --bind 0.0.0.0:8080 --workers 1 --threads 2 \
   --max-requests 1000 --max-requests-jitter 100
 MemoryMax=192M
 Restart=on-failure
