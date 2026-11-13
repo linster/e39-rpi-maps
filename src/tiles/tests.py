@@ -136,3 +136,52 @@ class TileTests(SimpleTestCase):
             t.join()
         self.assertEqual(len(self.fake.requests), 8)
         self.assertLessEqual(self.fake.max_active, 2)
+
+
+class PrefetchTests(TileTests):
+
+    def test_prefetch_never_goes_upstream(self):
+        self.get(5, 1, 2)                                    # cached by a normal request
+        r = self.client.get("/tiles/5/1/2.png", HTTP_X_TILE_PREFETCH="1")
+        self.assertEqual((r.status_code, r["X-Tile-Source"]), (200, "cache"))
+        r = self.client.get("/tiles/5/2/2.png", HTTP_X_TILE_PREFETCH="1")
+        self.assertEqual(r.status_code, 404)
+        self.assertIn(b"prefetching", r.content)
+        self.assertEqual(len(self.fake.requests), 1)
+
+
+class PruneTests(SimpleTestCase):
+
+    def make(self, root, z, x, y, size, age_days):
+        png = root / str(z) / str(x) / f"{y}.png"
+        png.parent.mkdir(parents=True, exist_ok=True)
+        png.write_bytes(b"p" * size)
+        png.with_suffix(".json").write_text("{}")
+        t = time.time() - age_days * 86400
+        os.utime(png, (t, t))
+        return png
+
+    def test_oldest_go_first_down_to_90_percent(self):
+        from .prune import prune
+
+        root = Path(tempfile.mkdtemp())
+        old = [self.make(root, 10, i, 0, 100_000, 30 + i) for i in range(5)]     # 30-34 days
+        new = [self.make(root, 11, i, 0, 100_000, i) for i in range(5)]          # 0-4 days
+        count, total, removed, freed = prune(root, 600_000)                      # 1 MB > 0.6 MB
+        self.assertEqual((count, removed), (10, 5))
+        self.assertTrue(all(not p.exists() and not p.with_suffix(".json").exists() for p in old))
+        self.assertTrue(all(p.exists() for p in new))
+        self.assertFalse((root / "10").exists())                                 # empty dirs gone
+        self.assertLessEqual(total - freed, 540_000)
+
+    def test_under_the_limit_nothing_happens(self):
+        from django.core.management import call_command
+        from io import StringIO
+
+        root = Path(tempfile.mkdtemp())
+        self.make(root, 3, 1, 1, 1000, 100)
+        out = StringIO()
+        with self.settings(TILE_CACHE_DIR=root):
+            call_command("prune_tile_cache", "--max-mb", "1", stdout=out)
+        self.assertIn("removed 0 tiles", out.getvalue())
+        self.assertTrue((root / "3" / "1" / "1.png").exists())

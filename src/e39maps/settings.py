@@ -174,6 +174,9 @@ TILE_UPSTREAM_URL = os.environ.get("DJANGO_TILE_UPSTREAM_URL", "https://tile.ope
 TILE_UPSTREAM_CONNECTIONS = int(os.environ.get("DJANGO_TILE_UPSTREAM_CONNECTIONS", "2"))
 TILE_UPSTREAM_TIMEOUT = float(os.environ.get("DJANGO_TILE_UPSTREAM_TIMEOUT", "10"))
 TILE_CACHE_MAX_AGE = int(os.environ.get("DJANGO_TILE_CACHE_MAX_AGE", str(7 * 24 * 3600)))
+# Size limit of the tile cache, kept by `manage.py prune_tile_cache` (a
+# timer on the device): the oldest-fetched tiles go first.
+TILE_CACHE_MAX_MB = int(os.environ.get("DJANGO_TILE_CACHE_MAX_MB", "1024"))
 TILE_CLIENT_MAX_AGE = 24 * 3600
 
 

@@ -152,6 +152,14 @@ backend. From, in order (`src/tiles/sources.py`; the source is in the
 404 when a tile isn't available (offline and not cached); empty
 `DJANGO_TILE_UPSTREAM_URL` = offline. `/healthz` reports the tile setup.
 
+- **Prefetching** (the HMI's "Download Map Tiles", header
+  `X-Tile-Prefetch: 1`): served from MBTiles and the cache only, never
+  fetched from the upstream, since OSM's policy forbids bulk downloads.
+- **Cache size**: `python manage.py prune_tile_cache` keeps the cache under
+  `DJANGO_TILE_CACHE_MAX_MB` (1024): over the limit, the tiles fetched or
+  revalidated longest ago go first, down to 90% of it (tiles in use are
+  revalidated weekly, so they stay). A timer runs it on the device.
+
 ## gRPC API (for the HMI)
 
 The HMI talks to this backend over gRPC for POIs and routes (map tiles will
@@ -254,6 +262,7 @@ important ones:
 | `DJANGO_ROUTING_TILES_PATH` | `e39maps-routing.tar` beside the map database | Valhalla's routing tiles. |
 | `DJANGO_ROUTING_CACHE_MB` | `64` | Valhalla's cache of decoded tiles. |
 | `DJANGO_TILE_CACHE_DIR` | `output/tile-cache` | Map tile cache (`/tiles/...`). |
+| `DJANGO_TILE_CACHE_MAX_MB` | `1024` | Tile cache limit (`prune_tile_cache`). |
 | `DJANGO_TILE_UPSTREAM_URL` | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | Upstream for tile misses; empty = offline. |
 | `DJANGO_TILES_MBTILES_PATH` | `e39maps-tiles.mbtiles` beside the map database | Pre-rendered tiles, if any. |
 

@@ -14,6 +14,9 @@
    a stale cached tile is served rather than nothing.
 
 TILE_UPSTREAM_URL = "" makes the backend offline: MBTiles and cache only.
+So does get_tile(..., allow_upstream=False), for bulk prefetching (the HMI's
+"Download Map Tiles" sends X-Tile-Prefetch): OSM's policy forbids bulk
+downloads, so prefetching only copies what's already here.
 """
 
 import json
@@ -163,7 +166,7 @@ def _fetch_upstream(z, x, y, meta):
             raise
 
 
-def get_tile(z, x, y):
+def get_tile(z, x, y, allow_upstream=True):
     if not valid(z, x, y):
         raise ValueError(f"no tile {z}/{x}/{y}")
     max_age = settings.TILE_CLIENT_MAX_AGE
@@ -176,10 +179,11 @@ def get_tile(z, x, y):
     if cached is not None and age < settings.TILE_CACHE_MAX_AGE:
         return Tile(cached, "cache", max_age)
 
-    if not settings.TILE_UPSTREAM_URL:
+    if not settings.TILE_UPSTREAM_URL or not allow_upstream:
         if cached is not None:
             return Tile(cached, "stale", max_age)
-        raise TileUnavailable(f"tile {z}/{x}/{y} isn't available offline")
+        why = "offline" if allow_upstream else "for prefetching (never fetched from upstream)"
+        raise TileUnavailable(f"tile {z}/{x}/{y} isn't available {why}")
     try:
         fresh, new_meta = _fetch_upstream(z, x, y, meta if cached is not None else {})
     except (OSError, urllib.error.URLError) as exc:

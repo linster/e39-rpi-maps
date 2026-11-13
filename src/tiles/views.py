@@ -7,9 +7,11 @@ from .sources import TileUnavailable, get_tile
 @require_GET
 def tile(request, z, x, y):
     """A 256 px map tile, OSM's z/x/y scheme (see sources.py for where it
-    comes from). 404 when it isn't available (offline and not cached)."""
+    comes from). 404 when it isn't available (offline and not cached).
+    X-Tile-Prefetch: 1 (bulk downloads): MBTiles and cache only."""
+    prefetch = request.headers.get("X-Tile-Prefetch", "") not in ("", "0")
     try:
-        t = get_tile(z, x, y)
+        t = get_tile(z, x, y, allow_upstream=not prefetch)
     except ValueError as exc:
         return HttpResponseBadRequest(str(exc), content_type="text/plain")
     except TileUnavailable as exc:
