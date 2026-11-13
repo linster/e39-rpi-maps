@@ -4,6 +4,7 @@
 """
 
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -94,6 +95,14 @@ class BuildTests(unittest.TestCase):
     def test_only_chosen_categories(self):
         self.run_build(["fuel"])
         self.assertEqual(set(self.rows()), {"Esso Bank St", "Shell"})
+
+    def test_rebuild_with_the_same_companions_leaves_no_temporary_files(self):
+        tiles = self.dir / "tiles.tar"
+        tiles.write_bytes(b"routing" * 100)
+        for _ in range(2):
+            build(self.region, ["fuel"], self.out, [self.dir / "a.osm", self.dir / "b.osm"],
+                  log=lambda *_: None, routing=(tiles, "3.9.1"))
+        self.assertEqual(sorted(p.name for p in self.out.parent.iterdir()), ["map.routing.tar", "map.sqlite"])
 
     def test_rebuild_replaces_the_file(self):
         self.run_build(["fuel"])
@@ -292,3 +301,28 @@ class RasterCompanionTests(unittest.TestCase):
         damaged.write_bytes(b"\x00" * 1000)
         with self.assertRaisesRegex(schema.InvalidMapDatabase, "SHA-256"):
             push.paired_files(self.out, log=lambda *_: None)
+
+
+class MBTilesWriterTests(unittest.TestCase):
+
+    def test_files_stay_under_the_limit_and_resume(self):
+        import sqlite3
+
+        from e39maps_toolkit import rastertiles as rt
+
+        out = Path(tempfile.mkdtemp())
+        limit = 300_000
+        w = rt.MBTilesWriter(out, "tiles", {"name": "t"}, max_bytes=limit)
+        w._since_check = 0
+        for i in range(400):
+            w.add(16, i, 7, os.urandom(2000))
+        files = w.close()
+        self.assertGreater(len(files), 2)
+        for f in files:
+            self.assertLessEqual(f.stat().st_size, limit, f.name)
+        total = sum(sqlite3.connect(f).execute("SELECT count(*) FROM tiles").fetchone()[0] for f in files)
+        self.assertEqual(total, 400)
+        again = rt.MBTilesWriter(out, "tiles", {"name": "t"}, max_bytes=limit)
+        self.assertEqual(len(again.done), 400)
+        self.assertIn((16, 5, 7), again.done)
+        again.close()

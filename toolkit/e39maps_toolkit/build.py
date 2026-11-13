@@ -82,6 +82,11 @@ def extract_timestamp(path):
 def _place(src, dest):
     """Hard link src to dest (the toolkit's caches are usually on the same
     filesystem), else copy; atomically."""
+    if dest.exists() and os.path.samefile(src, dest):
+        # Already this file (a hard link from an earlier build): renaming a
+        # second link onto it would be a no-op that leaves the temporary
+        # name behind (POSIX rename of two links to one file).
+        return
     tmp = dest.with_name(f".{dest.name}.placing")
     tmp.unlink(missing_ok=True)
     try:

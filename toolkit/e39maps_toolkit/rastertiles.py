@@ -29,10 +29,11 @@ MAX_FILE_BYTES = 1_900_000_000
 METATILE = 8
 EARTH_CIRCUMFERENCE_KM = 40075.016
 
-# Rough average PNG size per zoom (openstreetmap-carto, this part of the
-# world), for the estimate before rendering; corrected by the real sizes.
-EST_BYTES = {6: 30000, 7: 30000, 8: 28000, 9: 25000, 10: 20000, 11: 15000, 12: 12000,
-             13: 10000, 14: 14000, 15: 18000, 16: 20000, 17: 15000, 18: 12000, 19: 10000}
+# Average PNG size per zoom, measured on the first full render (Ottawa +
+# 530 km: the circle at 6-13, towns at 14-16; 264,537 tiles, 2.28 GB): rural
+# tiles at 11-13 are small, town tiles at 14-16 bigger. For the estimate.
+EST_BYTES = {6: 13500, 7: 14500, 8: 17000, 9: 15000, 10: 12200, 11: 8300, 12: 6200,
+             13: 5100, 14: 14200, 15: 11700, 16: 8400, 17: 7000, 18: 6000, 19: 5000}
 
 
 @dataclass
@@ -195,12 +196,26 @@ class MBTilesWriter:
         self.conn.executemany("INSERT OR REPLACE INTO metadata VALUES (?, ?)",
                               [(k, str(v)) for k, v in {**self.metadata, "part": path.stem}.items()])
         self.bytes = path.stat().st_size
+        self._since_check = 0
+
+    def _file_bytes(self):
+        """The database file's real size (pages in use), including what
+        SQLite adds per tile (index, page slack): counting only the PNGs let
+        the first full render's file reach 2,031 MB for a 1,900 MB limit."""
+        count = self.conn.execute("PRAGMA page_count").fetchone()[0]
+        size = self.conn.execute("PRAGMA page_size").fetchone()[0]
+        return count * size
 
     def add(self, z, x, y, png):
-        if self.bytes + len(png) > self.max_bytes:
-            self._open(None)
+        # Measure the file every 5% of the limit (at most 5 MB); start a new
+        # file in time.
+        if self.bytes + len(png) > self.max_bytes or self._since_check > min(5_000_000, self.max_bytes // 20):
+            self.bytes, self._since_check = self._file_bytes(), 0
+            if self.bytes + len(png) > self.max_bytes:
+                self._open(None)
         self.conn.execute("INSERT OR REPLACE INTO tiles VALUES (?, ?, ?, ?)", (z, x, 2 ** z - 1 - y, png))
-        self.bytes += len(png) + 64
+        self.bytes += len(png)
+        self._since_check += len(png)
         self.done.add((z, x, y))
 
     def commit(self):

@@ -61,6 +61,11 @@ def run_build(settings, output=None, log=print, progress=None, status=None, canc
         raster_files = rastertiles.rendered_files(work)
         if raster_files:
             raster_info = rastertiles.summarize(raster_files)
+            sources = work / "sources.json"
+            if sources.exists():
+                dates = sorted(s["osm_timestamp"] for s in json.loads(sources.read_text()) if s.get("osm_timestamp"))
+                if dates:
+                    raster_info["tiles_osm_timestamp"] = dates[0]
             log(f"Offline map tiles: {len(raster_files)} file(s), {raster_info['tiles_count']:,} tiles "
                 f"(zooms {raster_info['tiles_zooms']}), rendered for this region")
         else:
@@ -101,8 +106,11 @@ def fetch_published(settings, tag=None, dest=None, log=print, progress=None, for
 
 
 def render_work(settings):
-    """The render work folder for the region and its extracts (keyed by
-    them, so a new region or newer extracts start a new import)."""
+    """The render work folder for the region: keyed by the circle and which
+    extracts it uses, not by their dates, so Geofabrik's daily updates don't
+    orphan a render (tiles from last week's OSM data are fine); the data a
+    render used is in its sources.json, and render-tiles.sh --refresh
+    redoes it with the current extracts."""
     import hashlib
 
     from .build import extract_timestamp
@@ -115,7 +123,7 @@ def render_work(settings):
     r = settings.region
     key = hashlib.sha1(json.dumps({
         "circle": [r.center_lat, r.center_lon, r.radius_km],
-        "extracts": [[e, extract_timestamp(p), p.stat().st_size] for e, p in zip(r.extracts, paths)],
+        "extracts": sorted(r.extracts),
     }, sort_keys=True).encode()).hexdigest()[:12]
     return render_root(settings.cache_dir) / key, paths
 
@@ -145,6 +153,10 @@ def render_prepare(settings, log=print):
                         str(merged), "-o", str(region_pbf) + ".part", "-f", "pbf", "--overwrite"], check=True)
         merged.unlink()
         Path(str(region_pbf) + ".part").rename(region_pbf)
+        from .build import extract_timestamp
+
+        (work / "sources.json").write_text(json.dumps(
+            [{"id": e, "osm_timestamp": extract_timestamp(p)} for e, p in zip(r.extracts, paths)]))
     towns_file = work / "towns.json"
     if not towns_file.exists():
         towns = rastertiles.find_towns([region_pbf], r.center_lat, r.center_lon, r.radius_km)
@@ -222,7 +234,8 @@ def main(argv=None):
     p.add_argument("tag", nargs="?", help="default: the pinned map (map-release.json), else the newest")
     p.add_argument("--dest", help="folder (default: the toolkit's cache, published/<tag>)")
     p.add_argument("--force", action="store_true", help="replace a different map in --dest")
-    sub.add_parser("render-prepare")
+    p = sub.add_parser("render-prepare")
+    p.add_argument("--dry-run", action="store_true", help="only print the work folder")
     p = sub.add_parser("render-plan", help="metatiles still to draw, as render_list input")
     p.add_argument("--work", required=True)
     p.add_argument("--zoom", type=int)
@@ -267,7 +280,10 @@ def main(argv=None):
         elif args.command == "fetch":
             print(fetch_published(settings, args.tag, args.dest, force=args.force))
         elif args.command == "render-prepare":
-            render_prepare(settings, log=lambda m: print(m, file=sys.stderr))
+            if args.dry_run:
+                print(render_work(settings)[0])
+            else:
+                render_prepare(settings, log=lambda m: print(m, file=sys.stderr))
         elif args.command == "render-plan":
             lines, zooms = render_plan_lines(settings, args.work, args.zoom)
             print(" ".join(map(str, zooms)) if args.zooms else "\n".join(lines))

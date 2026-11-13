@@ -4,6 +4,12 @@
 #
 #   toolkit/render-tiles.sh            prepare, import (if needed), render
 #   toolkit/render-tiles.sh --stop     stop the tile server, if one was left running
+#   toolkit/render-tiles.sh --refresh  start over with the current extracts
+#                                      (new import, everything re-rendered)
+#
+# A region's render is kept across Geofabrik's daily extract updates (tiles
+# from last week's OSM data are fine); <work>/sources.json says which data
+# it used. --refresh when the map should show newer data.
 #
 # Steps (podman; the region, extracts and tile plan come from the toolkit's
 # settings):
@@ -33,8 +39,19 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/e39maps-toolkit"
 command -v podman >/dev/null || { echo "Needs podman" >&2; exit 1; }
 stop_server() { podman rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 if [ "${1:-}" = --stop ]; then stop_server; exit 0; fi
+REFRESH=0
+[ "${1:-}" = --refresh ] && REFRESH=1
 
 echo "== 1. prepare"
+if [ "$REFRESH" = 1 ]; then
+    # Forget the old data: the work folder's inputs and output, the import
+    # and renderd's tile cache.
+    OLD="$("$HERE/map-toolkit-container.sh" render-prepare --dry-run | tail -1)"
+    if [ -d "$OLD" ]; then
+        rm -f "$OLD"/region.osm.pbf "$OLD"/towns.json "$OLD"/sources.json "$OLD"/tiles-*.mbtiles
+    fi
+    rm -f "$CACHE/render/imported-key"
+fi
 WORK="$("$HERE/map-toolkit-container.sh" render-prepare | tail -1)"
 [ -f "$WORK/region.osm.pbf" ] || { echo "prepare failed" >&2; exit 1; }
 KEY="$(basename "$WORK")"
