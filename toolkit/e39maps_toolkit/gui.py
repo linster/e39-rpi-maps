@@ -229,19 +229,37 @@ class ToolkitWindow:
         self.run_task("List published maps", work)
 
     def start_publish(self):
-        if not messagebox.askokcancel(
-                "Publish map", "Upload the local map (database + routing tiles, ~640 MB) as a GitHub "
-                               "release of e39-rpi-maps, and pin it in map-release.json?"):
+        try:
+            meta = schema.check(Path(self.settings.output))
+        except (OSError, schema.InvalidMapDatabase) as exc:
+            messagebox.showerror("Publish map", f"No map to publish: {exc}")
             return
+        size = sum(c.size for c in schema.companions(meta)) + Path(self.settings.output).stat().st_size
+        label = meta.get("region_label") or meta.get("region", "")
+        if not messagebox.askokcancel(
+                "Publish map", f"Upload the local map of {label} ({size / 1e6:,.0f} MB with its routing and "
+                               f"map tile files) as GitHub release {release.tag_for(meta)} of e39-rpi-maps?"):
+            return
+        pin = release.should_pin(meta, REPO)
+        if not pin:
+            pinned = release.read_manifest(REPO) or {}
+            answer = messagebox.askyesnocancel(
+                "Publish map", f"Image builds ship the pinned map, {pinned.get('tag')} "
+                               f"({pinned.get('region_label') or 'another region'}).\n\n"
+                               f"Pin this map of {label} instead? (No: publish it without changing the pin.)")
+            if answer is None:
+                return
+            pin = answer
 
         def work(settings):
             def bytes_progress(name, done, total):
                 self.events.put(("progress", (done / total if total else 0,
                                               f"{name}: {done / 1e6:.0f} / {total / 1e6:.0f} MB")))
 
-            manifest = release.publish(settings.output, REPO, log=self.log, progress=bytes_progress)
+            release.publish(settings.output, REPO, log=self.log, progress=bytes_progress, pin=pin)
+            pinned = (release.read_manifest(REPO) or {}).get("tag")
             found = release.GitHub().list_releases()
-            self.events.put(("releases", [f"{r['tag_name']}" + (" (pinned)" if r["tag_name"] == manifest["tag"] else "")
+            self.events.put(("releases", [f"{r['tag_name']}" + (" (pinned)" if r["tag_name"] == pinned else "")
                                           for r in found]))
 
         self.run_task("Publish map", work)
@@ -320,7 +338,8 @@ class ToolkitWindow:
             routing = schema.routing_info(meta)
             tiles = (f"routing tiles {int(routing['routing_size']) / 1e6:.0f} MB (Valhalla {routing['valhalla_version']})"
                      if routing else "no routing tiles")
-            self.db_info.configure(text=f"Built {meta['built_at']}: {meta['poi_count']} POIs, "
+            label = meta.get("region_label")
+            self.db_info.configure(text=(f"{label}, b" if label else "B") + f"uilt {meta['built_at']}: {meta['poi_count']} POIs, "
                                         f"{path.stat().st_size / 1e6:.1f} MB, {tiles}")
         except schema.InvalidMapDatabase as exc:
             self.db_info.configure(text=f"Not a map database from this toolkit: {exc}")

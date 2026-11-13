@@ -7,6 +7,7 @@
   toolkit/map-toolkit.sh update-image [--machine M] [--no-build]
   toolkit/map-toolkit.sh publish            publish the local map as a GitHub release
   toolkit/map-toolkit.sh releases           list the published maps
+  toolkit/map-toolkit.sh pin TAG            pin a published map for image builds (map-release.json)
   toolkit/map-toolkit.sh fetch [TAG]        download a published map (default: the pinned one)
   toolkit/map-toolkit.sh usb DIR            copy a map to a USB stick (DIR/RPIMAPS)
   toolkit/render-tiles.sh                   render offline map tiles (OSM style; podman)
@@ -228,8 +229,15 @@ def main(argv=None):
     p.add_argument("--target", default=None, help=f"host[:port] (default: the saved target, {QEMU_TARGET})")
     p.add_argument("--db")
     p.add_argument("--release", metavar="TAG", help="a published map instead of the local one")
-    sub.add_parser("publish")
+    p = sub.add_parser("publish")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--pin", dest="pin", action="store_true", default=None,
+                   help="pin it in map-release.json even if the pinned map is another region")
+    g.add_argument("--no-pin", dest="pin", action="store_false",
+                   help="don't pin it (default: pin when nothing is pinned or it's the same region)")
     sub.add_parser("releases")
+    p = sub.add_parser("pin", help="pin a published map for image builds (writes map-release.json)")
+    p.add_argument("tag")
     p = sub.add_parser("fetch")
     p.add_argument("tag", nargs="?", help="default: the pinned map (map-release.json), else the newest")
     p.add_argument("--dest", help="folder (default: the toolkit's cache, published/<tag>)")
@@ -270,7 +278,9 @@ def main(argv=None):
             db = fetch_published(settings, args.release) if args.release else (args.db or settings.output)
             live_swap(db, args.target or settings.target, settings.ssh_user, settings.ssh_password)
         elif args.command == "publish":
-            release.publish(settings.output, REPO)
+            release.publish(settings.output, REPO, pin=args.pin)
+        elif args.command == "pin":
+            release.pin_release(args.tag, REPO)
         elif args.command == "releases":
             pinned = (release.read_manifest(REPO) or {}).get("tag")
             for r in release.GitHub().list_releases():

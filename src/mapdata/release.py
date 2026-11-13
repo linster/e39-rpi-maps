@@ -184,7 +184,30 @@ def read_manifest(repo_root):
 
 
 def tag_for(meta):
-    return "map-" + meta["built_at"].replace("-", "").replace(":", "")
+    """map-<region slug>-<built_at>, e.g. map-ottawa-20261113T040254Z (maps of
+    different regions side by side); older maps without a slug:
+    map-<built_at>."""
+    stamp = meta["built_at"].replace("-", "").replace(":", "")
+    slug = meta.get("region_slug")
+    return f"map-{slug}-{stamp}" if slug else f"map-{stamp}"
+
+
+def title_for(meta):
+    label = meta.get("region_label") or meta.get("region", "")
+    radius = meta.get("radius_km")
+    return f"Map: {label}" + (f" ({radius} km)" if radius else "") + f", {meta['built_at'][:10]}"
+
+
+def should_pin(meta, repo_root):
+    """Pin a newly published map for image builds? Yes when nothing is pinned
+    yet or the pinned map is of the same region (same slug); a map of another
+    region (Edmonton while the car's image ships Ottawa) only when asked.
+    A pinned map from before maps had names (no slug) is replaced: there was
+    only one region then."""
+    pinned = read_manifest(repo_root)
+    if pinned is None or not pinned.get("region_slug"):
+        return True
+    return bool(meta.get("region_slug")) and pinned.get("region_slug") == meta.get("region_slug")
 
 
 def _file_entry(path, sha256=None):
@@ -194,9 +217,10 @@ def _file_entry(path, sha256=None):
 
 # --- publish / fetch ---------------------------------------------------------
 
-def publish(db_path, repo_root, gh=None, log=print, progress=None, target=None):
-    """Publish the map pair at db_path as a release; write the manifest.
-    Returns the manifest (dict)."""
+def publish(db_path, repo_root, gh=None, log=print, progress=None, target=None, pin=None):
+    """Publish the map at db_path as a release. pin: write it to
+    map-release.json (the map image builds ship); None = should_pin().
+    Returns the release's manifest (dict)."""
     db_path = Path(db_path)
     meta = schema.check(db_path)
     routing = schema.routing_info(meta)
@@ -229,7 +253,8 @@ def publish(db_path, repo_root, gh=None, log=print, progress=None, target=None):
     notes = "\n".join([
         f"Map built {meta['built_at']} by the e39-rpi map toolkit ({meta.get('toolkit_version', '')}).",
         "",
-        f"- Region: {meta.get('region', '')}",
+        f"- Region: {meta.get('region_label') or meta.get('region', '')}"
+        + (f" + {meta['radius_km']} km" if meta.get("radius_km") else ""),
         f"- POIs: {meta['poi_count']} ({meta.get('categories', '')})",
         f"- Routing tiles: " + (f"Valhalla {routing['valhalla_version']}, "
                                 f"{int(routing['routing_size']) / 1e6:.0f} MB" if routing else "none"),
@@ -240,7 +265,7 @@ def publish(db_path, repo_root, gh=None, log=print, progress=None, target=None):
         "Map data (c) OpenStreetMap contributors, ODbL 1.0.",
     ])
     log(f"Creating release {tag} on {gh.repo}...")
-    release = gh.create_release(tag, target, f"Map {meta['built_at']}", notes)
+    release = gh.create_release(tag, target, title_for(meta), notes)
     try:
         for f in files:
             log(f"Uploading {f.name} ({f.stat().st_size / 1e6:.0f} MB)...")
@@ -260,6 +285,8 @@ def publish(db_path, repo_root, gh=None, log=print, progress=None, target=None):
         "tag": tag,
         "built_at": meta["built_at"],
         "region": meta.get("region", ""),
+        "region_label": meta.get("region_label", ""),
+        "region_slug": meta.get("region_slug", ""),
         "poi_count": int(meta["poi_count"]),
         "valhalla_version": meta.get("valhalla_version"),
         "files": entries,
@@ -276,8 +303,14 @@ def publish(db_path, repo_root, gh=None, log=print, progress=None, target=None):
         except BaseException:
             gh.delete_release(release["id"])
             raise
-    manifest_path(repo_root).write_text(text)
-    log(f"Published {tag}. Wrote {MANIFEST_NAME}: commit and push it so builds use this map.")
+    if pin is None:
+        pin = should_pin(meta, repo_root)
+    if pin:
+        manifest_path(repo_root).write_text(text)
+        log(f"Published {tag}. Wrote {MANIFEST_NAME}: commit and push it so builds use this map.")
+    else:
+        log(f"Published {tag}. Not pinned: {MANIFEST_NAME} keeps "
+            f"{(read_manifest(repo_root) or {}).get('tag')} (another region) for image builds.")
     return manifest
 
 
@@ -343,6 +376,16 @@ def fetch(manifest, dest_dir, gh=None, log=print, progress=None, force=False):
     schema.check_companions(meta, dest_dir, verify_hash=False)
     log(f"Fetched {manifest['tag']} into {dest_dir}")
     return db
+
+
+def pin_release(tag, repo_root, gh=None, log=print):
+    """Pin an already published release: write its manifest as
+    map-release.json (e.g. switching image builds back to another region's
+    map). Returns the manifest."""
+    manifest = release_manifest(tag, gh)
+    manifest_path(repo_root).write_text(json.dumps(manifest, indent=2) + "\n")
+    log(f"Pinned {tag}. Wrote {MANIFEST_NAME}: commit and push it so builds use this map.")
+    return manifest
 
 
 def release_manifest(tag, gh=None):

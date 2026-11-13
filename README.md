@@ -136,7 +136,9 @@ copied beside the database rather than hard-linked from the cache
 - **Published maps** (GitHub releases; log in once with `gh auth login`):
   **Publish local map**, then pick a release to **Download**, **Download +
   live swap** or **Download + copy to USB stick** (commands: `publish`,
-  `releases`, `fetch`, `push --release TAG`, `usb DIR [--release TAG]`).
+  `releases`, `pin TAG`, `fetch`, `push --release TAG`, `usb DIR [--release TAG]`).
+  Releases are named after the region's city and pinning picks the one
+  images ship (see [Pinning](#pinning-which-map-images-ship)).
   Downloads are checked against the release's `map-release.json` (SHA-256)
   and kept in `~/.cache/e39maps-toolkit/published/<tag>`.
 - **USB stick** (no laptop needed): put the database and its routing
@@ -249,7 +251,7 @@ proto/              the gRPC contract (.proto)
 scripts/            gen-proto.sh
 toolkit/            the map toolkit (laptop only): build and push map databases
 output/db/          the local map (database + routing tiles; not committed) + ODbL attribution
-map-release.json    pins the published map image builds ship (map_updates.md)
+map-release.json    pins the published map image builds ship (RELEASE_PROCESS.md)
 ```
 
 The split matters for the Yocto build: the recipe installs `src/` as the
@@ -259,11 +261,34 @@ large database does not rebuild the code (and vice versa).
 Future apps (`maps`, `routing`) slot in next to `core`.
 
 Maps aren't committed. A map worth keeping is **published as a GitHub
-release** of this repository (`map-<built_at>`: the database, its routing
-tiles, `ATTRIBUTION.txt`, `map-release.json`), and the committed
-`map-release.json` pins the one image builds ship. `output/db/` is the
-local working copy (git-ignored). How to publish, download, push or put a
-map on a USB stick: [`map_updates.md`](map_updates.md).
+release** of this repository: `map-<city>-<built_at>`, named after the
+largest city at the circle's centre (e.g. `map-ottawa-20261113T044215Z`),
+so maps of several regions sit side by side. A release holds the
+database, its routing and map tiles, `ATTRIBUTION.txt` and
+`map-release.json`. `output/db/` is the local working copy (git-ignored).
+
+### Pinning: which map images ship
+
+Of all the published maps, the committed `map-release.json` names one, with
+its files' sizes and SHA-256: the **pinned** map. e39-rpi-yocto's
+`scripts/fetch-map.sh` downloads and checks that release, and the
+`e39maps-data` recipe puts it in the image, so the pin decides which map a
+freshly flashed SD card starts with. It travels with a commit: a new pin is
+a commit here, then a submodule update in e39-rpi-yocto. Any other release
+can still be live-swapped onto a device or copied to a USB stick.
+
+- Publishing pins the new map when nothing is pinned, the pinned map has no
+  name (from before maps had names), or it's of the same region (a newer
+  Ottawa map).
+- A map of **another region** (Edmonton while images ship Ottawa) is
+  published without moving the pin; the toolkit window asks, and
+  `publish --pin` pins it anyway (`--no-pin` never pins).
+- `toolkit/map-toolkit.sh pin TAG` pins an already published release (e.g.
+  back to Ottawa).
+
+The whole process, step by step: [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md).
+Putting a published map on a USB stick or a device:
+[`map_updates.md`](map_updates.md).
 
 ## Configuration
 

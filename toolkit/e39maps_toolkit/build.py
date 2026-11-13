@@ -23,6 +23,7 @@ from osmium.filter import TagFilter
 from mapdata import schema
 
 from . import categories as cats
+from . import naming
 
 EARTH_RADIUS_KM = 6371.0088
 
@@ -150,6 +151,10 @@ def build(region, categories, out_path, extract_paths, log=print, progress=None,
     conn = sqlite3.connect(tmp)
     schema.create(conn)
     tag_filter = TagFilter(*cats.tag_pairs(categories))
+    # Cities and towns too (nodes only), for naming the map (naming.py), in
+    # the same pass.
+    node_filter = TagFilter(*cats.tag_pairs(categories), ("place", "city"), ("place", "town"))
+    places = []
     counts = {c: 0 for c in categories}
     sources = []
     started = time.monotonic()
@@ -160,7 +165,7 @@ def build(region, categories, out_path, extract_paths, log=print, progress=None,
         sources.append({"file": path.name, "osm_timestamp": extract_timestamp(path)})
         found = kept = 0
         rows = []
-        processor = osmium.FileProcessor(str(path)).with_areas(tag_filter).with_filter(tag_filter)
+        processor = osmium.FileProcessor(str(path)).with_areas(tag_filter).with_filter(node_filter)
         for obj in processor:
             if cancelled():
                 conn.close()
@@ -180,6 +185,9 @@ def build(region, categories, out_path, extract_paths, log=print, progress=None,
             else:
                 continue        # ways/relations: their areas come separately
             tags = {t.k: t.v for t in obj.tags}
+            if osm_type == "node" and tags.get("place") in ("city", "town"):
+                places.append((tags.get("name") or tags.get("name:en") or "", tags["place"],
+                               naming.population(tags.get("population")), point[0], point[1]))
             match = cats.classify(tags, categories)
             if match is None:
                 continue
@@ -205,8 +213,13 @@ def build(region, categories, out_path, extract_paths, log=print, progress=None,
     for category, count in conn.execute("SELECT category, count(*) FROM map_poi GROUP BY category"):
         counts[category] = count
     total = sum(counts.values())
+    label = naming.metro_label(places, region.center_lat, region.center_lon, region.radius_km) or region.name
+    log(f"Named after the largest city at the centre: {label}")
     meta = {
         "schema_version": str(schema.SCHEMA_VERSION),
+        # Release tags and titles use these (map-<slug>-<built_at>).
+        "region_label": label,
+        "region_slug": naming.slug(label),
         "built_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "region": region.name,
         "center": f"{region.center_lat},{region.center_lon}",

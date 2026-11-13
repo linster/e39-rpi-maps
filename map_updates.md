@@ -8,10 +8,13 @@ A **map** is a database plus the files it names, all belonging together:
 | `e39maps-osm.routing.tar` | its routing tiles (Valhalla, for turn-by-turn routes) | ~625 MB |
 | `e39maps-osm.tiles-01.mbtiles`, `-02`, ... | its offline map tiles (OSM style), if rendered | up to ~1.9 GB each |
 
-Maps are published as **releases** of this repository on GitHub
-(`map-<date>`, e.g. `map-20261112T203245Z`), with both files as release
-assets. The car installs a map from a USB stick by itself: put the two
-files in a folder named **`RPIMAPS`** on the stick and plug it in.
+Maps are published as **releases** of this repository on GitHub, named
+after the region's city and the build date (`map-<city>-<date>`, e.g.
+`map-ottawa-20261113T040254Z`, titled "Map: Ottawa (530 km), 2026-11-13";
+maps from before regions had names are just `map-<date>`), with the files
+above as release assets. There can be maps of several regions side by side
+(Ottawa, Edmonton, ...). The car installs a map from a USB stick by itself:
+put its files in a folder named **`RPIMAPS`** on the stick and plug it in.
 
 ## What you need
 
@@ -53,7 +56,7 @@ toolkit/map-toolkit-container.sh usb /media/$USER/STICK --release map-20261112T2
 ### c) By hand, with a web browser
 
 1. Open <https://github.com/linster/e39-rpi-maps/releases> (logged in).
-2. Pick a `Map ...` release. Under **Assets**, download
+2. Pick a `Map: <city> ...` release. Under **Assets**, download
    **`e39maps-osm.sqlite`**, **`e39maps-osm.routing.tar`** and any
    **`e39maps-osm.tiles-NN.mbtiles`** (`ATTRIBUTION.txt` and
    `map-release.json` aren't needed in the car).
@@ -130,15 +133,41 @@ facts (`built_at`, `region`, ...).
 
 ## Publishing a map (for whoever builds maps)
 
+The full process, with pinning explained: [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md).
+
 1. Build and test a map with the toolkit (**Build map database**, then
    **Live swap** to QEMU).
 2. Commit and push e39-rpi-maps (the release's tag points at that commit).
 3. **Publish local map** (or `toolkit/map-toolkit-container.sh publish`):
-   uploads both files, `ATTRIBUTION.txt` and `map-release.json` as a
-   release `map-<built_at>`, and writes `map-release.json` in the
-   repository, which pins this map for image builds.
-4. Commit and push `map-release.json` (and bump the e39-rpi-yocto submodule)
-   so new images ship it.
+   uploads the map's files, `ATTRIBUTION.txt` and `map-release.json` as a
+   release `map-<city>-<built_at>`, and (see pinning below) writes
+   `map-release.json` in the repository, which pins this map for image
+   builds.
+4. If it was pinned: commit and push `map-release.json` (and bump the
+   e39-rpi-yocto submodule) so new images ship it.
+
+**The name.** A map is named after the largest metropolitan area at the
+centre of its circle: of the OSM cities (`place=city`) within a quarter of
+the radius of the centre (at least 30 km, at most 150 km), the one with the
+largest population. Ottawa + 530 km is "Ottawa" (Gatineau is nearby but
+smaller; Montréal, 165 km out, isn't at the centre); Edmonton + 1000 km is
+"Edmonton". With no city there: the nearest city in the circle, then the
+nearest town, then the region's name in the toolkit. The build logs the
+name, and the toolkit window shows it with the database.
+
+**Pinning with several regions.** `map-release.json` pins *one* map: the one
+images ship. Publishing pins the new map when nothing is pinned yet, the
+pinned map has no name (it predates names), or it's of the same region (a newer Ottawa map replaces the Ottawa
+map). A map of another region (Edmonton while the car's image ships
+Ottawa) is published without touching the pin; the window asks whether to
+pin it instead, and on the command line `publish --pin` pins it anyway
+(`--no-pin` never pins). `toolkit/map-toolkit.sh pin TAG` pins an already
+published release, e.g. back to Ottawa.
+
+Each region's rendered tile files are kept, so building another Ottawa map
+after an Edmonton one reuses Ottawa's tiles. Only *rendering* switches
+regions in the renderer's database, which holds one region at a time: a
+re-import (35 minutes for Ottawa + 530 km, more for a bigger circle).
 
 Release assets have no storage or download quota on GitHub (unlike Git LFS),
 but each file must be under 2 GiB.
