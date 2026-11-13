@@ -84,9 +84,12 @@ if [ -n "${DISPLAY:-}" ]; then
     fi
 fi
 
-# Host builds for "Update image": the toolkit writes <id>.request (JSON:
-# yocto_dir, machine) here; we run the build and answer with <id>.reply
-# (with-progress.sh's output: the log path).
+# Host jobs: the toolkit writes <id>.request (JSON) here; we start the job
+# and answer with <id>.reply (the starter's output, e.g. the log path):
+#   {"yocto_dir", "machine"}  "Update image": with-progress.sh scripts/build.sh
+#   {"render": true}          offline tiles: render-tiles.sh (needs podman,
+#                             so it can't run in here), with the progress
+#                             window if an e39-rpi-yocto checkout is known.
 REQUESTS="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/e39maps-toolkit.XXXXXX")"
 serve_builds() {
     while sleep 1; do
@@ -95,9 +98,19 @@ serve_builds() {
             reply="${req%.request}.reply"
             python3 - "$req" > "$reply.tmp" 2>&1 <<'EOF' || true
 import json, subprocess, sys
+import os
 r = json.load(open(sys.argv[1]))
-out = subprocess.run([r["yocto_dir"] + "/scripts/with-progress.sh", "scripts/build.sh", r["machine"]],
-                     cwd=r["yocto_dir"], capture_output=True, text=True, timeout=120)
+render = os.environ["RENDER_SCRIPT"]
+if r.get("render"):
+    yocto = r.get("yocto_dir") or ""
+    if yocto and os.path.exists(yocto + "/scripts/with-progress.sh"):
+        cmd, cwd = [yocto + "/scripts/with-progress.sh", render], yocto
+    else:
+        log = os.path.expanduser("~/.cache/e39maps-toolkit/render/render.log")
+        cmd, cwd = ["sh", "-c", f"setsid nohup {render} > {log} 2>&1 < /dev/null & echo Rendering; log: {log}"], None
+else:
+    cmd, cwd = [r["yocto_dir"] + "/scripts/with-progress.sh", "scripts/build.sh", r["machine"]], r["yocto_dir"]
+out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=120)
 print(out.stdout + out.stderr, end="")
 print(f"exit={out.returncode}")
 EOF
@@ -106,6 +119,7 @@ EOF
         done
     done
 }
+export RENDER_SCRIPT="$HERE/render-tiles.sh"
 serve_builds &
 HELPER=$!
 trap 'kill $HELPER 2>/dev/null; rm -rf "$REQUESTS"' EXIT

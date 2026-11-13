@@ -167,8 +167,10 @@ ROUTING_CACHE_MB = int(os.environ.get("DJANGO_ROUTING_CACHE_MB", "64"))
 # (with the map, later), else the on-device cache, else the upstream server.
 # DJANGO_TILE_UPSTREAM_URL="" = offline (MBTiles and cache only). OSM's tile
 # policy asks for at most 2 connections and caching for at least 7 days.
-TILES_MBTILES_PATH = Path(os.environ.get(
-    "DJANGO_TILES_MBTILES_PATH", MAP_DB_PATH.parent / "e39maps-tiles.mbtiles"))
+# A glob: the offline tiles come in several files (each under 2 GiB, the
+# size limit of a GitHub release asset).
+TILES_MBTILES_PATH = os.environ.get(
+    "DJANGO_TILES_MBTILES_PATH", str(MAP_DB_PATH.parent / "e39maps-tiles-*.mbtiles"))
 TILE_CACHE_DIR = Path(os.environ.get("DJANGO_TILE_CACHE_DIR", BASE_DIR.parent / "output" / "tile-cache"))
 TILE_UPSTREAM_URL = os.environ.get("DJANGO_TILE_UPSTREAM_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
 TILE_UPSTREAM_CONNECTIONS = int(os.environ.get("DJANGO_TILE_UPSTREAM_CONNECTIONS", "2"))

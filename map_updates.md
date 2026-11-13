@@ -1,11 +1,12 @@
 # Updating the car's map from a USB stick
 
-A **map** is two files that belong together:
+A **map** is a database plus the files it names, all belonging together:
 
 | File | What | Size |
 | --- | --- | --- |
 | `e39maps-osm.sqlite` | the map database: POIs (fuel, restaurants, parks, ...), and the facts that identify this map | ~13 MB |
 | `e39maps-osm.routing.tar` | its routing tiles (Valhalla, for turn-by-turn routes) | ~625 MB |
+| `e39maps-osm.tiles-01.mbtiles`, `-02`, ... | its offline map tiles (OSM style), if rendered | up to ~1.9 GB each |
 
 Maps are published as **releases** of this repository on GitHub
 (`map-<date>`, e.g. `map-20261112T203245Z`), with both files as release
@@ -14,8 +15,9 @@ files in a folder named **`RPIMAPS`** on the stick and plug it in.
 
 ## What you need
 
-- A USB stick with at least **1 GB free**. FAT32 (most sticks as sold),
-  exFAT or ext4 all work: the files are under FAT32's 4 GB limit.
+- A USB stick with room for all the map's files: ~1 GB without offline map
+  tiles, ~5-6 GB with them. FAT32 (most sticks as sold), exFAT or ext4 all
+  work: every file is under FAT32's 4 GB limit.
 - Access to the repository on GitHub (it's private): a GitHub account that
   can see `linster/e39-rpi-maps`.
 
@@ -52,12 +54,13 @@ toolkit/map-toolkit-container.sh usb /media/$USER/STICK --release map-20261112T2
 
 1. Open <https://github.com/linster/e39-rpi-maps/releases> (logged in).
 2. Pick a `Map ...` release. Under **Assets**, download
-   **`e39maps-osm.sqlite`** and **`e39maps-osm.routing.tar`** (the other
-   assets aren't needed in the car).
+   **`e39maps-osm.sqlite`**, **`e39maps-osm.routing.tar`** and any
+   **`e39maps-osm.tiles-NN.mbtiles`** (`ATTRIBUTION.txt` and
+   `map-release.json` aren't needed in the car).
 3. On the stick, make a folder **`RPIMAPS`** at the top level (upper or
    lower case, either works).
-4. Copy both files into it. **Don't rename them**: the database names its
-   routing tiles, and the car only accepts that pair.
+4. Copy all of them into it. **Don't rename them**: the database names its
+   companion files, and the car only accepts that exact set.
 5. Optional, to check the download: the release's `map-release.json` lists
    both files' sizes and SHA-256 sums (`sha256sum *` in the folder).
 6. Eject the stick properly (so the copy is complete).

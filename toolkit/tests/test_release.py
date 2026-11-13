@@ -155,6 +155,22 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "exists already"):
             self.publish()
 
+    def test_publish_and_fetch_carry_tile_files(self):
+        raster = self.dir / "t1.mbtiles"
+        raster.write_bytes(os.urandom(5000))
+        tiles = self.dir / "tiles2.tar"
+        tiles.write_bytes(os.urandom(3000))
+        db = self.dir / "local2" / "e39maps-osm.sqlite"
+        build(Region("Test", 45.4215, -75.6972, 100, ["a"]), ["fuel"], db, [self.dir / "a.osm"],
+              log=lambda *_: None, routing=(tiles, "3.9.1"), raster_files=[raster],
+              raster_info={"tiles_zooms": "6-13", "tiles_count": 7})
+        manifest = release.publish(db, self.repo, gh=self.fake.client(), log=lambda *_: None, target="abc123")
+        self.assertEqual(sorted(manifest["files"]), ["database", "routing", "tiles-01"])
+        self.assertIn("zooms 6-13, 7 tiles in 1 file(s)", self.fake.releases[manifest["tag"]]["body"])
+        dest = self.dir / "fetched2"
+        release.fetch(manifest, dest, gh=self.fake.client(), log=lambda *_: None)
+        self.assertEqual((dest / "e39maps-osm.tiles-01.mbtiles").read_bytes(), raster.read_bytes())
+
     def test_publish_needs_the_commit_on_github(self):
         with self.assertRaisesRegex(release.ReleaseError, "push e39-rpi-maps first"):
             release.publish(self.db, self.repo, gh=self.fake.client(), log=lambda *_: None, target="notpushed")
@@ -187,7 +203,8 @@ class ReleaseTests(unittest.TestCase):
         # Corrupt the uploaded tiles: the checksum catches it, nothing is left behind.
         aid = next(a for a in self.fake.releases[manifest["tag"]]["assets"]
                    if self.fake.assets[a]["name"].endswith(".tar"))
-        self.fake.assets[aid]["data"] = b"X" + self.fake.assets[aid]["data"][1:]
+        data = self.fake.assets[aid]["data"]
+        self.fake.assets[aid]["data"] = bytes([data[0] ^ 0xFF]) + data[1:]    # always a different byte
         with self.assertRaisesRegex(release.ReleaseError, "doesn't match the manifest"):
             release.fetch(manifest, dest, gh=self.fake.client(), log=lambda *_: None, force=True)
         self.assertEqual(sorted(p.name for p in dest.iterdir()), ["e39maps-osm.sqlite"])

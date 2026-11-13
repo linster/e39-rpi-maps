@@ -14,9 +14,10 @@ FROM docker.io/library/python:3.12-slim-bookworm
 # tk: the Tcl/Tk libraries for tkinter (the window); fonts for it;
 # openssh-client + sshpass: live swap over ssh/scp (root has an empty
 # password on development images); git: the toolkit records the maps repo's
-# version in the map database.
+# version in the map database; osmium-tool: clips and merges the extracts
+# for the raster tile renderer's import.
 RUN apt-get -o Acquire::Retries=5 update \
- && apt-get install -y --no-install-recommends tk fonts-dejavu-core openssh-client sshpass git \
+ && apt-get install -y --no-install-recommends tk fonts-dejavu-core openssh-client sshpass git osmium-tool \
  && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /opt/e39maps-toolkit/requirements.txt

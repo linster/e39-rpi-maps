@@ -13,7 +13,7 @@ from mapdata import schema
 from .config import MACHINES, QEMU_TARGET, REPO
 from . import versions
 from mapdata import release
-from .push import PushError, copy_to_usb, live_swap, update_image
+from .push import PushError, copy_to_usb, live_swap, start_render, update_image
 
 PAD = {"padx": 6, "pady": 3}
 
@@ -26,7 +26,7 @@ class ToolkitWindow:
         self.busy = False
         self.cancel_requested = threading.Event()
         root.title("e39-rpi map toolkit")
-        root.minsize(1000, 760)
+        root.minsize(1000, 820)
         root.protocol("WM_DELETE_WINDOW", self.close)
 
         main = ttk.Frame(root, padding=8)
@@ -50,6 +50,25 @@ class ToolkitWindow:
         self.picker = RegionPicker(region_tab, self.settings.region, self.settings.cache_dir, self.log)
         self.picker.grid(row=0, column=0, sticky="nsew", **PAD)
         self._categories_frame(region_tab).grid(row=1, column=0, sticky="ew", **PAD)
+
+        from .rasterpanel import RasterPanel
+
+        def current_region():
+            try:
+                return self.picker.get()
+            except ValueError:
+                return None
+
+        def current_settings():
+            s = self.settings
+            region = current_region()
+            if region is not None:
+                s.region = region
+            return s
+
+        self.raster = RasterPanel(region_tab, self.settings, current_region, current_settings,
+                                  self.start_render, self.log)
+        self.raster.grid(row=2, column=0, sticky="ew", **PAD)
 
         build_tab.columnconfigure(0, weight=1)
         build_tab.columnconfigure(1, weight=1)
@@ -271,6 +290,7 @@ class ToolkitWindow:
     def collect(self):
         s = self.settings
         s.region = self.picker.get()
+        s.raster = self.raster.settings_dict()
         s.categories = [k for k, v in self.category_vars.items() if v.get()]
         s.routing = self.routing.get()
         s.cache_dir = self.cache_dir.get().strip()
@@ -368,6 +388,24 @@ class ToolkitWindow:
             live_swap(settings.output, settings.target, settings.ssh_user, settings.ssh_password, log=self.log)
 
         self.run_task(f"Live swap on {self.collect().target or 'device'}", work)
+
+    def start_render(self):
+        """Render the offline tiles: toolkit/render-tiles.sh on the host
+        (podman), in the background with its own progress window."""
+        if not messagebox.askokcancel(
+                "Render offline tiles",
+                "Render the offline map tiles for this region now?\n\n" + self.raster.estimate.cget("text")
+                + "\n\nThe first time, importing the region into the renderer's database takes 1-2 hours "
+                  "and tens of GB of disk. Rendering is resumable: run it again after an interruption. "
+                  "Rebuild the map afterwards to include the tiles."):
+            return
+
+        def work(settings):
+            log = start_render(settings.yocto_dir, log=self.log)
+            if log:
+                self.log(f"Render log: {log}")
+
+        self.run_task("Render offline tiles", work)
 
     def start_update_image(self):
         if not self.check_versions("Update the image"):

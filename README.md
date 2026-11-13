@@ -92,6 +92,11 @@ copied beside the database rather than hard-linked from the cache
   junkyards (OSM tags: `toolkit/e39maps_toolkit/categories.py`). Named
   objects only, except fuel stations and car parts stores (brand/operator
   instead).
+- **Companion files**: a map is the database plus the files it names
+  (`mapdata.schema.companions`): its routing tiles and its offline map
+  tiles. Every route checks them all (size, SHA-256) and installs them
+  together; the device keeps them as `e39maps-routing.tar` and
+  `e39maps-tiles-NN.mbtiles` beside the database.
 - **Routing tiles** (on by default): Valhalla's car-only road network for
   the extracts (all of Ontario and Quebec: ~625 MB, ~5 minutes, ~13 GB of
   RAM), built with pyvalhalla's `valhalla_build_tiles` and cached (rebuilt
@@ -100,6 +105,24 @@ copied beside the database rather than hard-linked from the cache
   records their size, SHA-256 and Valhalla version: the two files are one
   map version and always travel together (push, USB, image), checked
   before they're installed.
+- **Offline map tiles** (tab 1, "Offline map tiles"): raster tiles in
+  OpenStreetMap's own style, rendered on the laptop by
+  `toolkit/render-tiles.sh` (the "Render offline tiles" button runs it):
+  the toolkit container clips the extracts to the circle and merges them
+  (osmium-tool), the `overv/openstreetmap-tile-server` container (2.3.0:
+  PostGIS, osm2pgsql, Mapnik, openstreetmap-carto) imports that into a
+  PostGIS volume (`e39maps-osm-db`; once per region/extracts, ~1-2 h, tens
+  of GB) and serves tiles, and the toolkit fetches the planned tiles into
+  MBTiles files (`tiles-NN.mbtiles` in `~/.cache/e39maps-toolkit/render/
+  <region key>/`, a new file every ~1.9 GB: GitHub's release asset limit;
+  resumable). Default plan: the circle at zooms 6-13 plus zooms 14-16 within
+  8 km of cities and 3 km of towns (OSM place=city/town), configurable,
+  with extra areas and a live tile/size estimate (Ottawa + 530 km: 264,537
+  tiles, ~4 GB). The next "Build map database" includes them: the files
+  are companions of the database like the routing tiles (names, sizes,
+  SHA-256 in its facts) and travel with it everywhere (live swap, USB,
+  image, releases). The backend serves them first (`/tiles/...`, source
+  `mbtiles`).
 - **Live swap** (QEMU on `localhost:2222`, or a device's host/IP): copies
   the database over ssh next to the installed one, then the device's
   installer (`e39maps-mapdb`, Yocto layer) checks it, stops the services
@@ -137,9 +160,10 @@ container's Python).
 backend. From, in order (`src/tiles/sources.py`; the source is in the
 `X-Tile-Source` response header):
 
-1. **`mbtiles`**: a pre-rendered MBTiles file (`DJANGO_TILES_MBTILES_PATH`,
-   default `e39maps-tiles.mbtiles` beside the map database). None exists
-   yet: the toolkit will render one later.
+1. **`mbtiles`**: the map's offline tiles, pre-rendered in OSM's style by the
+   toolkit (`DJANGO_TILES_MBTILES_PATH`, a glob, default
+   `e39maps-tiles-*.mbtiles` beside the map database; several files, each
+   under 2 GiB).
 2. **`cache`**: the on-device cache (`DJANGO_TILE_CACHE_DIR`; on the device
    `/var/lib/e39maps/tiles`), tiles fetched earlier, so any tile seen once
    also works offline.
@@ -264,7 +288,7 @@ important ones:
 | `DJANGO_TILE_CACHE_DIR` | `output/tile-cache` | Map tile cache (`/tiles/...`). |
 | `DJANGO_TILE_CACHE_MAX_MB` | `1024` | Tile cache limit (`prune_tile_cache`). |
 | `DJANGO_TILE_UPSTREAM_URL` | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | Upstream for tile misses; empty = offline. |
-| `DJANGO_TILES_MBTILES_PATH` | `e39maps-tiles.mbtiles` beside the map database | Pre-rendered tiles, if any. |
+| `DJANGO_TILES_MBTILES_PATH` | `e39maps-tiles-*.mbtiles` beside the map database (a glob) | Pre-rendered tiles, if any. |
 
 `DJANGO_DEBUG=0` also enables WhiteNoise's compressed, hashed static storage,
 so run `collectstatic` as part of the build/install step.

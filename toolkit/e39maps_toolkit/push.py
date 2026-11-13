@@ -23,7 +23,6 @@ from mapdata import schema
 
 DATA_DIR = "/usr/share/e39rpi-maps/data"
 INCOMING = f"{DATA_DIR}/.incoming-e39maps-osm.sqlite"
-INCOMING_ROUTING = f"{DATA_DIR}/.incoming-{schema.ROUTING_DEVICE_NAME}"
 INSTALLER = "/usr/libexec/e39maps-mapdb"
 DB_NAME = "e39maps-osm.sqlite"
 
@@ -73,19 +72,27 @@ def _run(cmd, log, timeout):
 
 
 def paired_files(db_path, log=print):
-    """(meta, routing tiles path or None), checked to belong together."""
+    """(meta, [(companion, path)]): the map database and the files it names
+    (routing tiles, raster tile files) beside it, checked to belong to it."""
     meta = schema.check(db_path)
-    if schema.routing_info(meta) is None:
-        return meta, None
-    tiles = Path(db_path).with_name(meta["routing_file"])
-    log(f"Checking the routing tiles {tiles.name}...")
-    schema.check_routing(meta, tiles)
-    return meta, tiles
+    found = schema.companions(meta)
+    if found:
+        log(f"Checking {len(found)} companion file(s) (SHA-256)...")
+    return meta, schema.check_companions(meta, Path(db_path).parent)
+
+
+def _describe_files(pairs):
+    if not pairs:
+        return "no routing or map tiles"
+    kinds = {}
+    for c, path in pairs:
+        kinds.setdefault(c.kind, []).append(path.stat().st_size)
+    return ", ".join(f"{len(sizes)} {kind} file(s) {sum(sizes) / 1e6:.0f} MB" for kind, sizes in kinds.items())
 
 
 def live_swap(db_path, target, user="root", password="", log=print):
     db_path = Path(db_path)
-    meta, tiles = paired_files(db_path, log)
+    meta, pairs = paired_files(db_path, log)
     host, port = parse_target(target)
     ssh = _ssh_base("ssh", host, port, user, password) + [f"{user}@{host}"]
     log(f"Map database {db_path.name}: built {meta['built_at']}, {meta['poi_count']} POIs, "
@@ -97,7 +104,7 @@ def live_swap(db_path, target, user="root", password="", log=print):
     if lines[-1:] != ["ok"]:
         raise PushError(f"{host} has no {INSTALLER}: its image is older than the map toolkit; "
                         "update the image first")
-    if tiles:
+    if schema.routing_info(meta):
         # Tiles only load with the Valhalla that built them: ask the device.
         code, lines = _run(ssh + [DEVICE_VALHALLA_VERSION], log, 30)
         device = (lines[-1] if lines else "").strip()
@@ -108,7 +115,8 @@ def live_swap(db_path, target, user="root", password="", log=print):
             raise PushError(f"{host} has Valhalla {device}, but these routing tiles were built with {built}: "
                             "they wouldn't load. Update the image, or build with the matching pyvalhalla.")
 
-    copies = [(db_path, INCOMING)] + ([(tiles, INCOMING_ROUTING)] if tiles else [])
+    # Next to the installed map, so the installer's swap is a rename.
+    copies = [(path, f"{DATA_DIR}/.incoming-{c.device_name}") for c, path in pairs] + [(db_path, INCOMING)]
     for src, dest in copies:
         log(f"Copying {src.name} ({src.stat().st_size / 1e6:.0f} MB) to {host}:{dest}...")
         started = time.monotonic()
@@ -119,8 +127,8 @@ def live_swap(db_path, target, user="root", password="", log=print):
         log(f"  copied in {time.monotonic() - started:.0f} s")
 
     log("Installing (check, stop services, swap, start)...")
-    routing_arg = f" --routing {INCOMING_ROUTING}" if tiles else ""
-    code, _ = _run(ssh + [f"{INSTALLER} install --move{routing_arg} {INCOMING}"], log, 900)
+    with_args = "".join(f" --with {dest}" for _src, dest in copies[:-1])
+    code, _ = _run(ssh + [f"{INSTALLER} install --move{with_args} {INCOMING}"], log, 1800)
     if code != 0:
         raise PushError(f"the installer on {host} failed (exit {code}); the old map database stays")
     log(f"Done: {host} uses the map database built {meta['built_at']}.")
@@ -141,23 +149,26 @@ def yocto_data_dir(yocto_dir):
 
 def update_image(db_path, yocto_dir, machine, build=True, log=print):
     db_path = Path(db_path)
-    meta, tiles = paired_files(db_path, log)
+    meta, pairs = paired_files(db_path, log)
     yocto_dir = Path(yocto_dir)
     if not (yocto_dir / "scripts" / "build.sh").exists():
         raise PushError(f"{yocto_dir} isn't an e39-rpi-yocto checkout (no scripts/build.sh)")
     data_dir = yocto_data_dir(yocto_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    # Routing tiles first (under the name the database records), then the
-    # database; tiles of an older map are removed.
-    for old in data_dir.glob("*.routing.tar"):
-        if tiles is None or old.name != tiles.name:
-            old.unlink()
-    for src, name in ([(tiles, tiles.name)] if tiles else []) + [(db_path, DB_NAME)]:
+    # Companion files first (under the names the database records), then the
+    # database; files of an older map are removed. The data recipe installs
+    # the database as DB_NAME, so its companions are named after that.
+    wanted = {c.name for c, _p in pairs}
+    for pattern in ("*.routing.tar", "*.tiles-*.mbtiles"):
+        for old in data_dir.glob(pattern):
+            if old.name not in wanted:
+                old.unlink()
+    for src, name in [(path, c.name) for c, path in pairs] + [(db_path, DB_NAME)]:
         tmp = data_dir / f".{name}.copying"
         shutil.copyfile(src, tmp)
         tmp.replace(data_dir / name)
     log(f"Installed into the image build: {data_dir} (built {meta['built_at']}, {meta['poi_count']} POIs, "
-        + (f"routing tiles {tiles.name})" if tiles else "no routing tiles)"))
+        f"{_describe_files(pairs)})")
     if not build:
         return None
     log(f"Starting the image build for {machine} (progress window)...")
@@ -176,12 +187,40 @@ def update_image(db_path, yocto_dir, machine, build=True, log=print):
     return m.group(1) if m else None
 
 
-def _request_host_build(requests, yocto_dir, machine, timeout=120):
-    """In the toolkit container (map-toolkit-container.sh): bitbake runs on
-    the host, so ask the launcher's helper to start the build there."""
+def start_render(yocto_dir, log=print):
+    """Start toolkit/render-tiles.sh in the background (with the progress
+    window when an e39-rpi-yocto checkout is set); returns its log path."""
+    script = Path(__file__).resolve().parents[1] / "render-tiles.sh"
+    host_jobs = os.environ.get("E39MAPS_HOST_BUILDS")
+    if host_jobs:
+        text, ok = _request_host_build(Path(host_jobs), yocto_dir, None, request={"render": True,
+                                                                                  "yocto_dir": str(yocto_dir or "")})
+    else:
+        progress = Path(yocto_dir or "") / "scripts" / "with-progress.sh"
+        if yocto_dir and progress.exists():
+            out = subprocess.run([str(progress), str(script)], cwd=yocto_dir, capture_output=True, text=True,
+                                 timeout=60)
+            text, ok = out.stdout + out.stderr, out.returncode == 0
+        else:
+            logfile = Path.home() / ".cache" / "e39maps-toolkit" / "render" / "render.log"
+            logfile.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.Popen([str(script)], stdout=open(logfile, "w"), stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+            text, ok = f"Rendering; log: {logfile}", True
+    for line in text.splitlines():
+        log(f"  {line}")
+    if not ok:
+        raise PushError("couldn't start the renderer")
+    m = re.search(r"log: (\S+)", text)
+    return m.group(1) if m else None
+
+
+def _request_host_build(requests, yocto_dir, machine, timeout=120, request=None):
+    """In the toolkit container (map-toolkit-container.sh): bitbake (and
+    podman) run on the host, so ask the launcher's helper to start the job."""
     rid = uuid.uuid4().hex
     tmp = requests / f"{rid}.tmp"
-    tmp.write_text(json.dumps({"yocto_dir": str(yocto_dir), "machine": machine}))
+    tmp.write_text(json.dumps(request or {"yocto_dir": str(yocto_dir), "machine": machine}))
     tmp.rename(requests / f"{rid}.request")
     reply = requests / f"{rid}.reply"
     deadline = time.monotonic() + timeout
@@ -203,14 +242,16 @@ def copy_to_usb(db_path, stick_dir, log=print, progress=None):
     database records, so the device's USB import (e39maps-usb-import@)
     installs it when the stick is plugged in. Returns the folder."""
     db_path = Path(db_path)
-    meta, tiles = paired_files(db_path, log)
+    meta, pairs = paired_files(db_path, log)
     stick = Path(stick_dir)
     if not stick.is_dir():
         raise PushError(f"{stick} isn't a folder (the stick's mount point, e.g. /media/$USER/STICK)")
     folder = next((d for d in stick.iterdir() if d.is_dir() and d.name.upper() == USB_FOLDER),
                   stick / USB_FOLDER)
     folder.mkdir(exist_ok=True)
-    files = [db_path] + ([tiles] if tiles else [])
+    # Companions first, the database last: an import only starts from a
+    # database, and by then the files it names are complete.
+    files = [path for _c, path in pairs] + [db_path]
     if (folder / db_path.name).exists():
         raise PushError(f"{folder} has a {db_path.name} already (not imported yet?): remove it first")
     need = sum(f.stat().st_size for f in files)

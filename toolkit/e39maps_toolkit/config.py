@@ -46,6 +46,7 @@ class Settings:
     region: Region = field(default_factory=lambda: Region(**asdict(DEFAULT_REGION)))
     categories: list = field(default_factory=lambda: list(schema.CATEGORIES))
     routing: bool = True               # build routing tiles (Valhalla) with the map
+    raster: dict = field(default_factory=dict)   # rastertiles.TilePlan (offline map tiles)
     cache_dir: str = field(default_factory=lambda: str(default_cache_dir()))
     output: str = str(REPO / "output" / "db" / "e39maps-osm.sqlite")
     target: str = QEMU_TARGET          # "localhost:2222" (QEMU) or host[:port]
@@ -78,6 +79,11 @@ class Settings:
 def routing_cache_dir(cache_dir):
     """Routing tiles cache, next to the extract cache."""
     return Path(cache_dir).parent / "routing"
+
+
+def render_root(cache_dir):
+    """Offline raster tiles: work folders (one per region + extracts)."""
+    return Path(cache_dir).parent / "render"
 
 
 def toolkit_version():

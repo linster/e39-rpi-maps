@@ -1,7 +1,8 @@
 """Where map tiles (256 px raster PNGs, OSM's z/x/y scheme) come from, in order:
 
-1. an MBTiles file (pre-rendered by the map toolkit, shipped with the map;
-   none yet): settings.TILES_MBTILES_PATH, opened read-only;
+1. MBTiles files (pre-rendered by the map toolkit in OSM's style, shipped
+   with the map; split in parts under 2 GiB): settings.TILES_MBTILES_PATH,
+   a glob, opened read-only;
 2. the on-device cache: settings.TILE_CACHE_DIR/<z>/<x>/<y>.png, writable,
    filled from 3;
 3. the upstream tile server (settings.TILE_UPSTREAM_URL, by default
@@ -59,33 +60,40 @@ _mbtiles_local = threading.local()
 
 
 def _mbtiles():
-    path = Path(settings.TILES_MBTILES_PATH)
-    if not path.is_file():
-        return None
-    conn = getattr(_mbtiles_local, "conn", None)
-    key = (str(path), path.stat().st_mtime)
-    if conn is None or getattr(_mbtiles_local, "key", None) != key:
-        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True, check_same_thread=False)
-        _mbtiles_local.conn, _mbtiles_local.key = conn, key
-    return conn
+    """Read-only connections to the MBTiles files (per thread; reopened when
+    the files change, e.g. after a map update)."""
+    import glob
+
+    paths = sorted(glob.glob(str(settings.TILES_MBTILES_PATH)))
+    key = tuple((p, os.stat(p).st_mtime) for p in paths)
+    if getattr(_mbtiles_local, "key", None) != key:
+        for conn in getattr(_mbtiles_local, "conns", []):
+            conn.close()
+        _mbtiles_local.conns = [sqlite3.connect(f"file:{p}?mode=ro&immutable=1", uri=True,
+                                                check_same_thread=False) for p in paths]
+        _mbtiles_local.key = key
+    return _mbtiles_local.conns
 
 
 def from_mbtiles(z, x, y):
-    conn = _mbtiles()
-    if conn is None:
-        return None
-    # MBTiles rows are TMS: y counted from the south.
-    row = conn.execute("SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?",
-                       (z, x, 2 ** z - 1 - y)).fetchone()
-    return row[0] if row else None
+    for conn in _mbtiles():
+        # MBTiles rows are TMS: y counted from the south.
+        row = conn.execute("SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?",
+                           (z, x, 2 ** z - 1 - y)).fetchone()
+        if row:
+            return row[0]
+    return None
 
 
 def mbtiles_info():
-    conn = _mbtiles()
-    if conn is None:
+    conns = _mbtiles()
+    if not conns:
         return None
     try:
-        return dict(conn.execute("SELECT name, value FROM metadata"))
+        info = dict(conns[0].execute("SELECT name, value FROM metadata"))
+        info["files"] = len(conns)
+        info["tiles"] = sum(c.execute("SELECT count(*) FROM tiles").fetchone()[0] for c in conns)
+        return info
     except sqlite3.Error as exc:
         return {"error": str(exc)}
 

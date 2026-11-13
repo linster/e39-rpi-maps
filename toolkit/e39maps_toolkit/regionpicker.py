@@ -64,7 +64,7 @@ class RegionPicker(ttk.LabelFrame):
 
         import tkintermapview
 
-        self.map = tkintermapview.TkinterMapView(self, width=560, height=360, corner_radius=0,
+        self.map = tkintermapview.TkinterMapView(self, width=560, height=320, corner_radius=0,
                                                  user_agent=regions.USER_AGENT)
         self.map.grid(row=1, column=0, sticky="nsew", **PAD)
         self.map.add_left_click_map_command(self.on_map_click)

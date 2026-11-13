@@ -79,37 +79,63 @@ def extract_timestamp(path):
     return header.get("osmosis_replication_timestamp") or header.get("timestamp") or ""
 
 
-def place_routing(out_path, routing, log=print):
-    """Put the routing tiles beside the database (hard link from the cache
-    when possible, else a copy) under schema.routing_name_for(); return
-    their facts for e39maps_meta. Without routing, remove a stale file."""
-    dest = out_path.with_name(schema.routing_name_for(out_path.name))
-    if routing is None:
-        dest.unlink(missing_ok=True)
-        return {}
-    tiles, version = routing
+def _place(src, dest):
+    """Hard link src to dest (the toolkit's caches are usually on the same
+    filesystem), else copy; atomically."""
     tmp = dest.with_name(f".{dest.name}.placing")
     tmp.unlink(missing_ok=True)
     try:
-        os.link(tiles, tmp)
+        os.link(src, tmp)
     except OSError:
         import shutil
-        shutil.copyfile(tiles, tmp)
+        shutil.copyfile(src, tmp)
     os.replace(tmp, dest)
-    log(f"Routing tiles: {dest.name}; checksumming...")
-    return {
-        "routing_file": dest.name,
-        "routing_size": str(dest.stat().st_size),
-        "routing_sha256": schema.sha256_file(dest),
-        "valhalla_version": version,
-    }
+
+
+def place_companions(out_path, routing, raster_files, raster_info=None, log=print):
+    """Put the routing tiles and the raster tile files beside the database
+    (schema.routing_name_for / tiles_name_for), remove ones from an earlier
+    build that this one doesn't have, and return their facts for
+    e39maps_meta."""
+    facts = {}
+    routing_dest = out_path.with_name(schema.routing_name_for(out_path.name))
+    if routing is None:
+        routing_dest.unlink(missing_ok=True)
+    else:
+        tiles, version = routing
+        _place(tiles, routing_dest)
+        log(f"Routing tiles: {routing_dest.name}; checksumming...")
+        facts.update({
+            "routing_file": routing_dest.name,
+            "routing_size": str(routing_dest.stat().st_size),
+            "routing_sha256": schema.sha256_file(routing_dest),
+            "valhalla_version": version,
+        })
+
+    stem = out_path.name.rsplit(".", 1)[0]
+    wanted = set()
+    entries = []
+    for i, src in enumerate(raster_files or [], 1):
+        dest = out_path.with_name(schema.tiles_name_for(out_path.name, i))
+        _place(src, dest)
+        wanted.add(dest.name)
+        log(f"Map tiles: {dest.name} ({dest.stat().st_size / 1e6:.0f} MB); checksumming...")
+        entries.append({"name": dest.name, "size": dest.stat().st_size, "sha256": schema.sha256_file(dest)})
+    for old in out_path.parent.glob(f"{stem}.tiles-*.mbtiles"):
+        if old.name not in wanted:
+            old.unlink()
+    if entries:
+        facts["tiles_files"] = json.dumps(entries)
+        facts.update({k: str(v) for k, v in (raster_info or {}).items()})
+    return facts
 
 
 def build(region, categories, out_path, extract_paths, log=print, progress=None,
-          cancelled=lambda: False, toolkit_version="", routing=None):
+          cancelled=lambda: False, toolkit_version="", routing=None, raster_files=None, raster_info=None):
     """Write the map database to out_path (replaced atomically). routing:
-    (tiles tar, Valhalla version) to pair with it, or None. Returns the
-    facts written to e39maps_meta."""
+    (tiles tar, Valhalla version) to pair with it, or None; raster_files:
+    rendered MBTiles files (raster_info: tiles_zooms, tiles_count). Returns
+    the facts written to e39maps_meta."""
     categories = [c for c in schema.CATEGORIES if c in set(categories)]
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,9 +213,9 @@ def build(region, categories, out_path, extract_paths, log=print, progress=None,
         "toolkit_version": toolkit_version,
         "attribution": "Map data (c) OpenStreetMap contributors, ODbL 1.0. "
                        "https://www.openstreetmap.org/copyright",
-        # The tiles go beside the database first, so the database never
-        # names tiles that aren't there.
-        **place_routing(out_path, routing, log),
+        # The companion files go beside the database first, so the database
+        # never names files that aren't there.
+        **place_companions(out_path, routing, raster_files, raster_info, log),
     }
     conn.executemany("INSERT INTO e39maps_meta VALUES (?, ?)", meta.items())
     conn.commit()
@@ -203,7 +229,8 @@ def build(region, categories, out_path, extract_paths, log=print, progress=None,
     os.replace(tmp, out_path)
     log(f"Wrote {out_path} ({out_path.stat().st_size / 1e6:.1f} MB): {total} POIs "
         f"in {time.monotonic() - started:.0f} s"
-        + (f", with routing tiles {meta['routing_file']}" if "routing_file" in meta else ", no routing tiles"))
+        + (f", with routing tiles {meta['routing_file']}" if "routing_file" in meta else ", no routing tiles")
+        + (f", {len(json.loads(meta['tiles_files']))} map tile file(s)" if "tiles_files" in meta else ""))
     for category, count in counts.items():
         log(f"  {schema.CATEGORIES[category]}: {count}")
     return meta

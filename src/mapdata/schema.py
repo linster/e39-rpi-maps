@@ -15,8 +15,11 @@ reads only the version(s) it knows.
 """
 
 import hashlib
+import json
 import os
 import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
 
 APPLICATION_ID = 0x45333950  # "E39P"
 SCHEMA_VERSION = 1
@@ -100,6 +103,68 @@ def check_routing(meta, tiles_path, verify_hash=True):
             f"{tiles_path} doesn't belong to this map database ({size} bytes, expected {info['routing_size']})")
     if verify_hash and sha256_file(tiles_path) != info["routing_sha256"]:
         raise InvalidMapDatabase(f"{tiles_path} is damaged or doesn't belong to this map database (SHA-256)")
+
+
+# Offline raster tiles (OSM style, rendered by the toolkit) travel with the
+# map too, as MBTiles files split under 2 GiB each:
+#   tiles_files    JSON list of {"name", "size", "sha256"} (beside the database)
+#   tiles_zooms    e.g. "6-16"; tiles_count
+# On the device they're installed as e39maps-tiles-01.mbtiles, -02, ...
+TILES_DEVICE_PATTERN = "e39maps-tiles-{:02d}.mbtiles"
+
+
+def tiles_name_for(db_name, index):
+    """A tiles file's name beside a database: e39maps-osm.tiles-01.mbtiles."""
+    stem = db_name.rsplit(".", 1)[0] if "." in db_name else db_name
+    return f"{stem}.tiles-{index:02d}.mbtiles"
+
+
+@dataclass(frozen=True)
+class Companion:
+    """A file that belongs to a map database: its routing tiles, or one of
+    its raster tile files. They're one map version: checked, copied and
+    installed together with the database."""
+    kind: str            # "routing" or "tiles"
+    name: str            # beside the database (toolkit output, USB stick, release asset)
+    size: int
+    sha256: str
+    device_name: str     # installed under this name, next to the database
+
+
+def companions(meta):
+    """The companion files a map database names (none for an old/bare one)."""
+    found = []
+    info = routing_info(meta)
+    if info:
+        found.append(Companion("routing", info["routing_file"], int(info["routing_size"]),
+                               info["routing_sha256"], ROUTING_DEVICE_NAME))
+    for i, f in enumerate(json.loads(meta.get("tiles_files") or "[]"), 1):
+        found.append(Companion("tiles", f["name"], int(f["size"]), f["sha256"], TILES_DEVICE_PATTERN.format(i)))
+    return found
+
+
+def check_file(companion, path, verify_hash=True):
+    """Raise InvalidMapDatabase unless path is that companion file."""
+    if not os.path.isfile(path):
+        raise InvalidMapDatabase(f"{companion.kind} file missing: {path}")
+    size = os.path.getsize(path)
+    if size != companion.size:
+        raise InvalidMapDatabase(
+            f"{path} doesn't belong to this map database ({size} bytes, expected {companion.size})")
+    if verify_hash and sha256_file(path) != companion.sha256:
+        raise InvalidMapDatabase(f"{path} is damaged or doesn't belong to this map database (SHA-256)")
+
+
+def check_companions(meta, folder, device_names=False, verify_hash=True):
+    """[(companion, path)] of all companion files, found in folder under
+    their names (or their device names), each checked."""
+    pairs = []
+    for c in companions(meta):
+        path = Path(folder) / (c.device_name if device_names else c.name)
+        check_file(c, path, verify_hash)
+        pairs.append((c, path))
+    return pairs
+
 
 SCHEMA = """
 CREATE TABLE e39maps_meta (

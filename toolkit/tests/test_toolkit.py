@@ -230,3 +230,65 @@ class MiscTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RasterCompanionTests(unittest.TestCase):
+    """Offline map tiles (MBTiles files) travel with the map like the routing tiles."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        (self.dir / "a.osm").write_text(OSM_A)
+        self.region = Region("Test", 45.4215, -75.6972, 100, ["a"])
+        self.out = self.dir / "out" / "e39maps-osm.sqlite"
+        self.raster = []
+        for i in (1, 2):
+            f = self.dir / "render" / f"tiles-{i:02d}.mbtiles"
+            f.parent.mkdir(exist_ok=True)
+            f.write_bytes(bytes([i]) * 1000)
+            self.raster.append(f)
+
+    def run_build(self, raster):
+        return build(self.region, ["fuel"], self.out, [self.dir / "a.osm"], log=lambda *_: None,
+                     raster_files=raster, raster_info={"tiles_zooms": "6-16", "tiles_count": 42})
+
+    def test_build_records_and_places_tile_files(self):
+        meta = self.run_build(self.raster)
+        found = schema.companions(meta)
+        self.assertEqual([(c.kind, c.name, c.device_name) for c in found], [
+            ("tiles", "e39maps-osm.tiles-01.mbtiles", "e39maps-tiles-01.mbtiles"),
+            ("tiles", "e39maps-osm.tiles-02.mbtiles", "e39maps-tiles-02.mbtiles")])
+        self.assertEqual((meta["tiles_zooms"], meta["tiles_count"]), ("6-16", "42"))
+        stored = schema.check(self.out)
+        self.assertEqual(len(schema.check_companions(stored, self.out.parent)), 2)
+        # A rebuild with one file removes the stale second one.
+        meta = self.run_build(self.raster[:1])
+        self.assertEqual(len(schema.companions(meta)), 1)
+        self.assertFalse(self.out.with_name("e39maps-osm.tiles-02.mbtiles").exists())
+        # Without tiles: none named, none left.
+        meta = self.run_build(None)
+        self.assertEqual(schema.companions(meta), [])
+        self.assertEqual(list(self.out.parent.glob("*.mbtiles")), [])
+
+    def test_usb_and_image_carry_the_tile_files(self):
+        self.run_build(self.raster)
+        stick = self.dir / "stick"
+        stick.mkdir()
+        folder = push.copy_to_usb(self.out, stick, log=lambda *_: None)
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), [
+            "e39maps-osm.sqlite", "e39maps-osm.tiles-01.mbtiles", "e39maps-osm.tiles-02.mbtiles"])
+        yocto = self.dir / "yocto"
+        (yocto / "scripts").mkdir(parents=True)
+        (yocto / "scripts" / "build.sh").write_text("")
+        data = push.yocto_data_dir(yocto)
+        data.mkdir(parents=True)
+        (data / "e39maps-osm.tiles-07.mbtiles").write_text("stale")
+        push.update_image(self.out, yocto, "qemuarm64", build=False, log=lambda *_: None)
+        self.assertEqual(sorted(p.name for p in data.iterdir()), [
+            "e39maps-osm.sqlite", "e39maps-osm.tiles-01.mbtiles", "e39maps-osm.tiles-02.mbtiles"])
+
+    def test_damaged_tile_file_is_refused(self):
+        self.run_build(self.raster)
+        damaged = self.out.with_name("e39maps-osm.tiles-02.mbtiles")
+        damaged.write_bytes(b"\x00" * 1000)
+        with self.assertRaisesRegex(schema.InvalidMapDatabase, "SHA-256"):
+            push.paired_files(self.out, log=lambda *_: None)

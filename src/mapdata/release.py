@@ -199,12 +199,9 @@ def publish(db_path, repo_root, gh=None, log=print, progress=None, target=None):
     Returns the manifest (dict)."""
     db_path = Path(db_path)
     meta = schema.check(db_path)
-    files = [db_path]
     routing = schema.routing_info(meta)
-    if routing:
-        tiles = db_path.with_name(meta["routing_file"])
-        schema.check_routing(meta, tiles, verify_hash=False)
-        files.append(tiles)
+    pairs = schema.check_companions(meta, db_path.parent, verify_hash=False)
+    files = [db_path] + [path for _c, path in pairs]
     attribution = db_path.with_name("ATTRIBUTION.txt")
     if attribution.exists():
         files.append(attribution)
@@ -225,8 +222,10 @@ def publish(db_path, repo_root, gh=None, log=print, progress=None, target=None):
 
     log("Checksumming...")
     entries = {"database": _file_entry(db_path)}
-    if routing:
-        entries["routing"] = _file_entry(files[1], routing["routing_sha256"])
+    tile_count = 0
+    for c, path in pairs:
+        key = "routing" if c.kind == "routing" else f"tiles-{(tile_count := tile_count + 1):02d}"
+        entries[key] = _file_entry(path, c.sha256)
     notes = "\n".join([
         f"Map built {meta['built_at']} by the e39-rpi map toolkit ({meta.get('toolkit_version', '')}).",
         "",
@@ -234,6 +233,8 @@ def publish(db_path, repo_root, gh=None, log=print, progress=None, target=None):
         f"- POIs: {meta['poi_count']} ({meta.get('categories', '')})",
         f"- Routing tiles: " + (f"Valhalla {routing['valhalla_version']}, "
                                 f"{int(routing['routing_size']) / 1e6:.0f} MB" if routing else "none"),
+        f"- Offline map tiles (OSM style): " + (f"zooms {meta.get('tiles_zooms', '')}, {meta.get('tiles_count', '?')} tiles "
+                                                 f"in {tile_count} file(s)" if tile_count else "none"),
         f"- OSM data: {meta.get('extracts', '')}",
         "",
         "Map data (c) OpenStreetMap contributors, ODbL 1.0.",
@@ -335,12 +336,11 @@ def fetch(manifest, dest_dir, gh=None, log=print, progress=None, force=False):
         for entry in manifest["files"].values():
             (dest_dir / f".{entry['name']}.download").unlink(missing_ok=True)
         raise
-    # Tiles first, then the database that names them.
+    # Companion files first, then the database that names them.
     for part, final in sorted(downloaded, key=lambda pf: pf[1] == db):
         os.replace(part, final)
     meta = schema.check(db)
-    if schema.routing_info(meta):
-        schema.check_routing(meta, db.with_name(meta["routing_file"]), verify_hash=False)
+    schema.check_companions(meta, dest_dir, verify_hash=False)
     log(f"Fetched {manifest['tag']} into {dest_dir}")
     return db
 

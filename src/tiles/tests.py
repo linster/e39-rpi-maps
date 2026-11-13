@@ -64,7 +64,7 @@ class TileTests(SimpleTestCase):
         self.cache = Path(tempfile.mkdtemp())
         self.override = override_settings(
             TILE_CACHE_DIR=self.cache, TILE_UPSTREAM_URL=self.fake.url,
-            TILES_MBTILES_PATH=self.cache / "none.mbtiles", TILE_CACHE_MAX_AGE=3600,
+            TILES_MBTILES_PATH=str(self.cache / "none-*.mbtiles"), TILE_CACHE_MAX_AGE=3600,
             TILE_UPSTREAM_TIMEOUT=5)
         self.override.enable()
         self.addCleanup(self.override.disable)
@@ -120,11 +120,19 @@ class TileTests(SimpleTestCase):
         conn.execute("INSERT INTO tiles VALUES (3, 2, 7 - 1, ?)", (b"\x89PNGmbtiles",))   # y=1 in XYZ
         conn.commit()
         conn.close()
-        with self.settings(TILES_MBTILES_PATH=mb):
+        mb2 = self.cache / "tiles-02.mbtiles"                                    # a second part
+        conn = sqlite3.connect(mb2)
+        conn.execute("CREATE TABLE tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB)")
+        conn.execute("INSERT INTO tiles VALUES (4, 0, 15, ?)", (b"\x89PNGpart2",))          # y=0 at zoom 4
+        conn.commit()
+        conn.close()
+        mb.rename(self.cache / "tiles-01.mbtiles")
+        with self.settings(TILES_MBTILES_PATH=str(self.cache / "tiles-*.mbtiles")):
             r = self.get(3, 2, 1)
             self.assertEqual((r["X-Tile-Source"], r.content), ("mbtiles", b"\x89PNGmbtiles"))
-            self.assertEqual(self.get(3, 2, 2)["X-Tile-Source"], "upstream")     # not in the file
-            self.assertEqual(sources.mbtiles_info(), {"name": "test"})
+            self.assertEqual(self.get(4, 0, 0).content, b"\x89PNGpart2")
+            self.assertEqual(self.get(3, 2, 2)["X-Tile-Source"], "upstream")     # in neither file
+            self.assertEqual(sources.mbtiles_info(), {"name": "test", "files": 2, "tiles": 2})
         self.assertEqual(len(self.fake.requests), 1)
 
     def test_at_most_two_upstream_connections(self):
