@@ -1,20 +1,30 @@
 {
   "repo": "linster/e39-rpi-maps",
-  "tag": "map-20261112T203245Z",
-  "built_at": "2026-11-12T20:32:45Z",
+  "tag": "map-20261113T040254Z",
+  "built_at": "2026-11-13T04:02:54Z",
   "region": "Ottawa +530 km (London ON - Quebec City), Canada",
-  "poi_count": 55871,
+  "poi_count": 55881,
   "valhalla_version": "3.9.1",
   "files": {
     "database": {
       "name": "e39maps-osm.sqlite",
       "size": 12922880,
-      "sha256": "da6ec264cb1aa2a9f98269f8c516809dda1c005b57d702c02567324b6b60a76e"
+      "sha256": "3727869bd3fd44b282f9b51d287e5eceab5310f18279e276575f97bf0bece5e1"
     },
     "routing": {
       "name": "e39maps-osm.routing.tar",
-      "size": 624599040,
-      "sha256": "afb017646992239233ca3fada6a0a7c8e2f2a3b180373e09c771463882529713"
+      "size": 624732160,
+      "sha256": "3473b0a0c80365a97c8f4751a61bfcbcdcd32602624bb9afb1ce358863940324"
+    },
+    "tiles-01": {
+      "name": "e39maps-osm.tiles-01.mbtiles",
+      "size": 2030919680,
+      "sha256": "26123339140f48aec30c5e221901c3e8d5a93afe32109f3c93bf75827da6885c"
+    },
+    "tiles-02": {
+      "name": "e39maps-osm.tiles-02.mbtiles",
+      "size": 244895744,
+      "sha256": "33d9d696b084730d51bb388dd424fd1f443e1aef3aad31542047aa62210eb719"
     }
   }
 }
