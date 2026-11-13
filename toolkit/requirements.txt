@@ -7,3 +7,6 @@ osmium==4.3.2
 pyvalhalla==3.9.1
 # The region picker's map (Tk widget, OpenStreetMap tiles; pulls in Pillow).
 tkintermapview==1.32
+# The map's time zone (the IANA zone at its centre; offline boundaries).
+timezonefinder==9.2.0
+timezonefinder-data==4.2026.5
