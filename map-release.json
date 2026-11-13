@@ -1,15 +1,17 @@
 {
   "repo": "linster/e39-rpi-maps",
-  "tag": "map-20261113T040254Z",
-  "built_at": "2026-11-13T04:02:54Z",
+  "tag": "map-ottawa-20261113T044215Z",
+  "built_at": "2026-11-13T04:42:15Z",
   "region": "Ottawa +530 km (London ON - Quebec City), Canada",
+  "region_label": "Ottawa",
+  "region_slug": "ottawa",
   "poi_count": 55881,
   "valhalla_version": "3.9.1",
   "files": {
     "database": {
       "name": "e39maps-osm.sqlite",
       "size": 12922880,
-      "sha256": "3727869bd3fd44b282f9b51d287e5eceab5310f18279e276575f97bf0bece5e1"
+      "sha256": "43657951cc0e5b088081e2b286d6413c1451637159d310234d6af30251c562f8"
     },
     "routing": {
       "name": "e39maps-osm.routing.tar",
