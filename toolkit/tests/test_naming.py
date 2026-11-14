@@ -86,6 +86,7 @@ class NamedMapTests(unittest.TestCase):
         _db, meta = self.build("My region", 45.45, -75.70, 530, "o")
         self.assertEqual(meta["region_label"], "Ottawa")
         self.assertEqual(meta["region_slug"], "ottawa")
+        self.assertEqual(meta["timezone"], "America/Toronto")
         self.assertEqual(meta["region"], "My region")
         self.assertEqual(meta["poi_count"], "1")
         self.assertRegex(release.tag_for(meta), r"^map-ottawa-\d{8}T\d{6}Z$")
@@ -94,6 +95,11 @@ class NamedMapTests(unittest.TestCase):
     def test_without_cities_the_region_name(self):
         _db, meta = self.build("Nowhere", 60.0, -120.0, 100, "n")
         self.assertEqual(meta["region_label"], "Nowhere")
+
+    def test_zones(self):
+        from e39maps_toolkit.timezones import zone_at
+        self.assertEqual(zone_at(53.5461, -113.4938), "America/Edmonton")
+        self.assertEqual(zone_at(50.4452, -104.6189), "America/Regina")
 
     def test_old_maps_keep_their_tags(self):
         self.assertEqual(release.tag_for({"built_at": "2026-11-13T04:02:54Z"}), "map-20261113T040254Z")
@@ -116,7 +122,9 @@ class NamedMapTests(unittest.TestCase):
         first = publish(ottawa)
         self.assertEqual(release.read_manifest(self.repo)["tag"], first["tag"])
         self.assertEqual(first["region_label"], "Ottawa")
+        self.assertEqual(first["timezone"], "America/Toronto")
         self.assertIn("- Region: Ottawa + 530 km", fake.releases[first["tag"]]["body"])
+        self.assertIn("- Time zone: America/Toronto", fake.releases[first["tag"]]["body"])
 
         self.assertFalse(release.should_pin(other_meta, self.repo))
         other = publish(other)
