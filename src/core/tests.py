@@ -118,3 +118,34 @@ class TimezoneViewTests(TestCase):
     def test_bad_positions(self):
         for params in ({}, {"lat": "x", "lon": "1"}, {"lat": "91", "lon": "0"}, {"lat": "0", "lon": "nan"}):
             self.assertEqual(self.get(**params).status_code, 400, params)
+
+
+class GeocodeViewTests(TestCase):
+    """GET /geocode (core.views.geocode)."""
+
+    databases = {"default", "mapdata"}
+
+    def setUp(self):
+        from api.tests import drop_geocoding, fill_geocoding
+
+        drop_geocoding(connections["mapdata"])
+        fill_geocoding(connections["mapdata"])
+
+    def tearDown(self):
+        from api.tests import drop_geocoding
+
+        drop_geocoding(connections["mapdata"])
+
+    def test_candidates(self):
+        response = self.client.get(reverse("core:geocode"), {"q": "100 Bank St, Ottawa", "near": "45.4,-75.7"})
+        self.assertEqual(response.status_code, 200)
+        best = response.json()["candidates"][0]
+        self.assertEqual((best["label"], best["precision"], best["lat"]), ("100 Bank Street, Ottawa", "address", 45.4))
+
+    def test_bad_requests_and_no_data(self):
+        from api.tests import drop_geocoding
+
+        self.assertEqual(self.client.get(reverse("core:geocode")).status_code, 400)
+        self.assertEqual(self.client.get(reverse("core:geocode"), {"q": "x", "near": "abc"}).status_code, 400)
+        drop_geocoding(connections["mapdata"])
+        self.assertEqual(self.client.get(reverse("core:geocode"), {"q": "x"}).status_code, 503)

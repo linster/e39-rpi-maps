@@ -110,3 +110,57 @@ class ZoneLookupTests(SimpleTestCase):
                          ("America/Toronto", timezones.SOURCE_MAP_CENTRE))
         self.assertEqual(timezones.zone_at(self.database(areas=False, centre_zone=None), 53.55, -113.49),
                          (None, None))
+
+
+class AddressNormalizingTests(SimpleTestCase):
+    """mapdata.addresses: normal forms and free-text parsing."""
+
+    def test_streets_compare_equal(self):
+        from mapdata.addresses import normalize_street as n
+
+        self.assertEqual(n("St. Laurent Blvd"), "saint laurent blvd")
+        self.assertEqual(n("Boulevard Saint-Laurent"), "blvd saint laurent")
+        self.assertEqual(n("Bank Street"), n("bank st."))
+        self.assertEqual(n("Rue de la Montagne"), "rue montagne")
+        self.assertEqual(n("Chemin Ste-Foy"), "ch sainte foy")
+        self.assertEqual(n("King St W"), n("King Street West"))
+        self.assertEqual(n("Rideau Ave"), n("Rideau Avenue"))
+        self.assertEqual(n("Montée Saint-François"), "mtee saint francois")
+        # A street called just "North": not a direction.
+        self.assertEqual(n("North"), "north")
+
+    def test_core_tokens(self):
+        from mapdata.addresses import core_tokens, street_tokens
+
+        self.assertEqual(core_tokens(street_tokens("King Street West")), ["king"])
+        self.assertEqual(core_tokens(street_tokens("Rue Principale")), ["principale"])
+
+    def test_postcodes(self):
+        from mapdata.addresses import normalize_postcode as p
+
+        self.assertEqual(p("k1p 1j1"), "K1P1J1")
+        self.assertEqual(p("K1P"), "K1P")
+        self.assertEqual(p("13662-1234"), "13662")
+        self.assertIsNone(p(" "))
+
+    def test_house_numbers(self):
+        from mapdata.addresses import house_number_key as h
+
+        self.assertEqual(h("12a"), (12, "12A"))
+        self.assertEqual(h("12-14"), (12, "12-14"))
+        self.assertIsNone(h("rear"))
+        self.assertIsNone(h("61355512345678"))     # a phone number, not a house number
+
+    def test_parse(self):
+        from mapdata.addresses import parse
+
+        self.assertEqual(parse("123 Bank St, Ottawa, ON K1P 1J1"),
+                         {"postcode": "K1P1J1", "number": "123", "street": "Bank St", "locality": "ottawa"})
+        self.assertEqual(parse("123, rue Principale, Gatineau (QC)"),
+                         {"number": "123", "street": "rue Principale", "locality": "gatineau"})
+        self.assertEqual(parse("12A Elm Cres"), {"number": "12A", "street": "Elm Cres"})
+        self.assertEqual(parse("Bank St 123"), {"street": "Bank St", "number": "123"})
+        self.assertEqual(parse("1 Main St, Massena, NY 13662"),
+                         {"postcode": "13662", "number": "1", "street": "Main St", "locality": "massena"})
+        self.assertEqual(parse("K1P"), {"postcode": "K1P"})
+        self.assertEqual(parse("Ottawa"), {"street": "Ottawa"})

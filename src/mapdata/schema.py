@@ -208,6 +208,64 @@ CREATE TABLE timezone_area (
     geometry TEXT NOT NULL
 );
 CREATE INDEX timezone_area_bbox ON timezone_area (min_lat, max_lat, min_lon, max_lon);
+
+-- Geocoding (mapdata.geocode): addresses, streets, places and postal codes
+-- from OpenStreetMap, offline. Names are stored as shown and in normal form
+-- (mapdata.addresses: lower case, accents folded, abbreviations unified).
+-- Empty in maps built without them, and missing in maps built before them.
+-- Facts: geocode_addresses, geocode_streets, geocode_postcodes.
+
+-- Localities (place=city/town/village/hamlet/suburb/quarter/neighbourhood).
+CREATE TABLE map_place (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT    NOT NULL,
+    norm       TEXT    NOT NULL,
+    kind       TEXT    NOT NULL,
+    latitude   REAL    NOT NULL,
+    longitude  REAL    NOT NULL,
+    population INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX map_place_norm ON map_place (norm);
+
+-- A street in a locality (addr:city, else the nearest city, town or village),
+-- one row per ~10 km cell it crosses, so streets of the same name in one big
+-- municipality stay apart. The point is on the street (one of its addresses
+-- or road segments). addresses: how many house numbers it has.
+CREATE TABLE map_street (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT    NOT NULL,
+    norm       TEXT    NOT NULL,
+    place      TEXT    NOT NULL,
+    place_norm TEXT    NOT NULL,
+    latitude   REAL    NOT NULL,
+    longitude  REAL    NOT NULL,
+    addresses  INTEGER NOT NULL
+);
+CREATE VIRTUAL TABLE map_street_fts USING fts5 (
+    norm, place_norm, content = 'map_street', content_rowid = 'id'
+);
+
+-- House numbers on a street. number: as written, upper case, no spaces
+-- ("12A"). number_int: its leading digits (for order and interpolation).
+-- Coordinates in microdegrees (compact: there are millions).
+CREATE TABLE map_address (
+    street_id  INTEGER NOT NULL,
+    number_int INTEGER NOT NULL,
+    number     TEXT    NOT NULL,
+    lat_e6     INTEGER NOT NULL,
+    lon_e6     INTEGER NOT NULL,
+    postcode   TEXT,
+    PRIMARY KEY (street_id, number_int, number)
+) WITHOUT ROWID;
+
+-- Postal codes (mapdata.addresses.normalize_postcode) at the centre of their
+-- addresses, Canadian forward sortation areas ("K1P") too.
+CREATE TABLE map_postcode (
+    code       TEXT    PRIMARY KEY,
+    latitude   REAL    NOT NULL,
+    longitude  REAL    NOT NULL,
+    addresses  INTEGER NOT NULL
+) WITHOUT ROWID;
 """
 
 OSM_TYPE_CODES = {"node": 1, "way": 2, "relation": 3}

@@ -8,4 +8,5 @@ urlpatterns = [
     path("", views.index, name="index"),
     path("healthz", views.healthz, name="healthz"),
     path("timezone", views.timezone, name="timezone"),
+    path("geocode", views.geocode, name="geocode"),
 ]

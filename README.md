@@ -150,8 +150,10 @@ copied beside the database rather than hard-linked from the cache
 The file format is `src/mapdata/schema.py`, shared by the toolkit, the
 backend and the device's installer: SQLite with `application_id` "E39P" and
 `user_version` = format version, `e39maps_meta` facts (`built_at`,
-`region`, `poi_count`, the extracts' OSM timestamps, ...), `map_poi` and
-`timezone_area`.
+`region`, `poi_count`, the extracts' OSM timestamps, ...), `map_poi`,
+`timezone_area` and the geocoding tables (see [Geocoding](#geocoding)).
+Maps built before a table was added still load; what needs it answers
+"unavailable".
 
 **Time zones in the map.** The fact `timezone` is the zone at the circle's
 centre (the device's zone when it has no position). `timezone_area` holds
@@ -223,10 +225,50 @@ from a copy (`java_package ca.stefanm.e39maps.v1`).
 | --- | --- | --- |
 | `e39maps.v1.PoiService` | `ListPois`, `GetPoi`, `CreatePoi`, `UpdatePoi` (with a `FieldMask`), `DeletePoi`, `SearchPois` (near a point with a radius, nearest first, or in a bounding box; by name; by category; visible only; limit 50, max 500) | the user's POIs (`pois` app, state database; also editable in the Django admin); `SearchPois` with `sources: MAP` also finds POIs from the map database (category, OSM details) |
 | `e39maps.v1.RouteService` | `ComputeRoute` (origin, destination, via points as stops, km/miles, instruction language → shape, length, duration, maneuvers with Valhalla's types, instructions and street names) | Valhalla in-process (`api/routing.py`), car costing, the map's routing tiles; `UNAVAILABLE` without them, `NOT_FOUND` when no road connects the points |
+| `e39maps.v1.GeocodeService` | `Geocode` (free text and/or an address in parts, as a vCard ADR has them; optionally a position to prefer → candidates, best first: label, position, precision `ADDRESS` / `INTERPOLATED` / `STREET` / `PLACE` / `POSTCODE`) | offline, from the map database (see "Geocoding"); `UNAVAILABLE` for a map built without it, an empty list when nothing matches |
 
 Routes and maneuvers (each with a location, a trigger radius and an
 instruction), how the HMI should use them, and the frozen Valhalla version:
 [`map_maneuvers.md`](map_maneuvers.md).
+
+### Geocoding
+
+Addresses to positions, offline (`src/mapdata/geocode.py`), for a contact's
+address, a typed destination or an event's location. The map toolkit
+extracts from OpenStreetMap, in a second pass over the extracts:
+
+| What | Table | Ottawa + 530 km |
+| --- | --- | --- |
+| addresses (address nodes and buildings), house numbers under their street | `map_address` | 3.5 million |
+| streets: one per name, locality and ~10 km cell, from addresses and named roads | `map_street` (+ FTS5 index `map_street_fts`) | 305,000 |
+| postal codes (full, and Canadian areas like `K1P`) at the centre of their addresses | `map_postcode` | 48,000 |
+| places (cities ... neighbourhoods) and municipalities | `map_place` | 5,400 |
+
+That takes the Ottawa map database from 13 MB to 140 MB, and the build from
+~3 to ~11 minutes (7 GB of memory on the laptop).
+
+- **Localities:** an address's `addr:city`, else its municipality from OSM's
+  administrative boundaries (level 8, or a level-6 area with no level 8
+  inside: a single-tier city such as Ottawa, not a county or an MRC), else
+  the nearest city, town or village. Official prefixes ("Township of",
+  "Ville de") are dropped.
+- **Names** are compared in a normal form (`src/mapdata/addresses.py`):
+  lower case, accents folded, street types and directions in one spelling
+  (St/Street, Ave/Av/Avenue, Boul/Blvd, Ch/Chemin, Rte/Route, N/Nord/North,
+  ...), "St"/"Ste" before a name as Saint/Sainte.
+- **A query:** free text is split into number, street, locality and postal
+  code (`123 Bank St, Ottawa, ON K1P 1J1`, `123, rue Principale, Gatineau`;
+  without commas a trailing place name is recognised). Streets whose names
+  have the query's words are scored on the name (type and direction
+  included), the locality (same name, or within reach of a place of that
+  name, e.g. Kanata inside Ottawa) and the distance to `near` or the postal
+  code. On the best streets the house number is looked up: the address,
+  else between the nearest lower and higher numbers on the same side
+  (`INTERPOLATED`), else the street. Postal codes and places answer when
+  there's no street. A few milliseconds per query.
+- **Not yet:** reverse geocoding (position → address) would need a spatial
+  index over the addresses (~45 MB more).
+- **HTTP**, for a look: `GET /geocode?q=123+Bank+St,+Ottawa[&near=lat,lon][&limit=5]`.
 
 Errors are gRPC status codes: `NOT_FOUND` (no POI with that id),
 `INVALID_ARGUMENT` (no name or location, coordinates out of range, a field
