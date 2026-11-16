@@ -82,3 +82,39 @@ class DevAdminTests(TestCase):
             with self.settings(DEV_ADMIN=value):
                 self.run_handler()
         self.assertFalse(User.objects.exists())
+
+
+class TimezoneViewTests(TestCase):
+    """GET /timezone (core.views.timezone)."""
+
+    databases = {"default", "mapdata"}
+
+    @classmethod
+    def setUpTestData(cls):
+        import json
+
+        square = [[-120, 49], [-110, 49], [-110, 60], [-120, 60], [-120, 49]]
+        with connections["mapdata"].cursor() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS e39maps_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            c.execute("INSERT OR REPLACE INTO e39maps_meta VALUES ('timezone', 'America/Regina')")
+            c.execute("CREATE TABLE IF NOT EXISTS timezone_area (id INTEGER PRIMARY KEY, zone TEXT NOT NULL, "
+                      "min_lat REAL NOT NULL, min_lon REAL NOT NULL, max_lat REAL NOT NULL, max_lon REAL NOT NULL, "
+                      "geometry TEXT NOT NULL)")
+            c.execute("INSERT INTO timezone_area (zone, min_lat, min_lon, max_lat, max_lon, geometry) "
+                      "VALUES (%s, 49, -120, 60, -110, %s)",
+                      ["America/Edmonton", json.dumps({"type": "Polygon", "coordinates": [square]})])
+
+    def get(self, **params):
+        return self.client.get(reverse("core:timezone"), params)
+
+    def test_zone_from_the_boundaries(self):
+        response = self.get(lat="53.55", lon="-113.49")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"zone": "America/Edmonton", "source": "boundaries"})
+
+    def test_outside_the_areas_the_map_zone(self):
+        self.assertEqual(self.get(lat="50.45", lon="-104.61").json(), {"zone": "America/Regina", "source": "map-centre"})
+
+    def test_bad_positions(self):
+        for params in ({}, {"lat": "x", "lon": "1"}, {"lat": "91", "lon": "0"}, {"lat": "0", "lon": "nan"}):
+            self.assertEqual(self.get(**params).status_code, 400, params)

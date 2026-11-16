@@ -150,7 +150,33 @@ copied beside the database rather than hard-linked from the cache
 The file format is `src/mapdata/schema.py`, shared by the toolkit, the
 backend and the device's installer: SQLite with `application_id` "E39P" and
 `user_version` = format version, `e39maps_meta` facts (`built_at`,
-`region`, `poi_count`, the extracts' OSM timestamps, ...) and `map_poi`.
+`region`, `poi_count`, the extracts' OSM timestamps, ...), `map_poi` and
+`timezone_area`.
+
+**Time zones in the map.** The fact `timezone` is the zone at the circle's
+centre (the device's zone when it has no position). `timezone_area` holds
+the zone boundaries of the region, so the device can follow the car across
+them (e39-rpi-yocto's `e39maps-timezone-follow`, from gpsd):
+
+- Source: [timezone-boundary-builder](https://github.com/evansiroky/timezone-boundary-builder)
+  release **2026e** (`timezones.geojson.zip`, every zone, e.g.
+  America/Toronto rather than New_York, which the `-now` variant would
+  merge it into), pinned with its SHA-256 in
+  `toolkit/e39maps_toolkit/timezones.py`. Keep the release in step with the
+  image's tzdata (e39-rpi-yocto `e39rpi-timezone-version.inc`), so every
+  zone it names exists on the device.
+- Downloaded once into `~/.cache/e39maps-toolkit/timezones/` and checked.
+  Building reads all of it (172 MB of GeoJSON, ~1.5 GB of memory, ~30 s).
+- Clipped to the circle + 20 km and simplified to ~100 m with
+  `shapely.coverage_simplify`, which keeps shared borders identical (no gaps
+  or overlaps between zones). Ottawa + 530 km: 4 zones, ~86 kB.
+- Facts: `timezone_areas` (rows) and `timezone_boundaries` (the release).
+- Looked up by `mapdata.timezones.zone_at` (pure Python, no shapely: the
+  device imports it): bounding boxes in SQL, then ray casting with holes. A
+  point on a shared border belongs to exactly one zone. Outside every area
+  (or a map built before `timezone_area`) it answers the map's `timezone`.
+  The backend serves it as `GET /timezone?lat=..&lon=..` →
+  `{"zone": ..., "source": "boundaries" | "map-centre"}`.
 Toolkit tests: `PYTHONPATH=toolkit:src toolkit/.venv/bin/python -m unittest
 discover -s toolkit/tests` (needs pyosmium and pyvalhalla: the venv or the
 container's Python).
@@ -334,7 +360,8 @@ Two SQLite databases (`e39maps/settings.py`, `e39maps/routers.py`):
 - Every map database has a `e39maps_meta (key, value)` table with facts like
   `schema_version`, `built_at` (ISO 8601, UTC) and `region`; `/healthz`
   reports them (or why the map database can't be read: the app runs without
-  one).
+  one). `/timezone?lat=..&lon=..` answers the time zone at a position (see
+  "Time zones in the map").
 - Django 5.0 has no SQLite `OPTIONS["init_command"]` (5.1+), so WAL,
   `synchronous=NORMAL` and foreign keys are set per connection in
   `e39maps/sqlite.py`, on the state database only.

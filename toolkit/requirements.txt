@@ -10,3 +10,5 @@ tkintermapview==1.32
 # The map's time zone (the IANA zone at its centre; offline boundaries).
 timezonefinder==9.2.0
 timezonefinder-data==4.2026.5
+# The zone boundaries in the map (clipping, simplifying; timezones.areas).
+shapely==2.1.2
