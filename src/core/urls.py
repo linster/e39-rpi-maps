@@ -7,4 +7,5 @@ app_name = "core"
 urlpatterns = [
     path("", views.index, name="index"),
     path("healthz", views.healthz, name="healthz"),
+    path("timezone", views.timezone, name="timezone"),
 ]

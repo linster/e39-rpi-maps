@@ -22,7 +22,7 @@ RUN apt-get -o Acquire::Retries=5 update \
 
 COPY requirements.txt /opt/e39maps-toolkit/requirements.txt
 RUN pip install --no-cache-dir -r /opt/e39maps-toolkit/requirements.txt \
- && python -c "import valhalla, osmium, tkinter; print('pyvalhalla', valhalla.__version__)"
+ && python -c "import valhalla, osmium, shapely, tkinter; print('pyvalhalla', valhalla.__version__, 'shapely', shapely.__version__)"
 
 # The mounted repository is owned by the host user, not by whoever runs in
 # the container: let git read it anyway.

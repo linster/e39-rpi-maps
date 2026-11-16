@@ -72,9 +72,12 @@ def run_build(settings, output=None, log=print, progress=None, status=None, canc
         else:
             log("No offline map tiles rendered for this region (toolkit/render-tiles.sh): "
                 "the map will have none")
+    from . import timezones
+
+    boundaries = timezones.fetch_boundaries(settings.cache_dir, log=log, progress=progress, cancelled=cancelled)
     return build(settings.region, settings.categories, out, paths, log=log, progress=status, cancelled=cancelled,
                  toolkit_version=toolkit_version(), routing=routing, raster_files=raster_files,
-                 raster_info=raster_info)
+                 raster_info=raster_info, timezone_boundaries=boundaries)
 
 
 def published_dir(settings, tag):

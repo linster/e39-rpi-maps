@@ -137,12 +137,32 @@ def place_companions(out_path, routing, raster_files, raster_info=None, log=prin
     return facts
 
 
+def write_timezone_areas(conn, region, boundaries, log=print):
+    """The region's time zones into timezone_area, from the boundaries
+    (timezones.fetch_boundaries' file, or GeoJSON). Returns the facts."""
+    started = time.monotonic()
+    log("Time zone boundaries: clipping to the region...")
+    areas = timezones.areas(timezones.read_features(boundaries), region.center_lat, region.center_lon,
+                            region.radius_km)
+    rows = [(zone, *bbox, json.dumps(geometry, separators=(",", ":"))) for zone, bbox, geometry in areas]
+    conn.executemany("INSERT INTO timezone_area (zone, min_lat, min_lon, max_lat, max_lon, geometry) "
+                     "VALUES (?, ?, ?, ?, ?, ?)", rows)
+    conn.commit()
+    size = sum(len(r[-1]) for r in rows)
+    log(f"Time zones in the region: {', '.join(r[0] for r in rows) or 'none'} "
+        f"({size / 1e3:.0f} kB of boundaries, {time.monotonic() - started:.0f} s)")
+    return {"timezone_areas": str(len(rows)), "timezone_boundaries": timezones.BOUNDARIES_RELEASE}
+
+
 def build(region, categories, out_path, extract_paths, log=print, progress=None,
-          cancelled=lambda: False, toolkit_version="", routing=None, raster_files=None, raster_info=None):
+          cancelled=lambda: False, toolkit_version="", routing=None, raster_files=None, raster_info=None,
+          timezone_boundaries=None):
     """Write the map database to out_path (replaced atomically). routing:
     (tiles tar, Valhalla version) to pair with it, or None; raster_files:
-    rendered MBTiles files (raster_info: tiles_zooms, tiles_count). Returns
-    the facts written to e39maps_meta."""
+    rendered MBTiles files (raster_info: tiles_zooms, tiles_count);
+    timezone_boundaries: the time zone boundaries (timezones.fetch_boundaries),
+    or None for a map without them. Returns the facts written to
+    e39maps_meta."""
     categories = [c for c in schema.CATEGORIES if c in set(categories)]
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -218,13 +238,16 @@ def build(region, categories, out_path, extract_paths, log=print, progress=None,
     log(f"Named after the largest city at the centre: {label}")
     zone = timezones.zone_at(region.center_lat, region.center_lon)
     log(f"Time zone at the centre: {zone or 'unknown'}")
+    zone_facts = write_timezone_areas(conn, region, timezone_boundaries, log) if timezone_boundaries else {}
     meta = {
         "schema_version": str(schema.SCHEMA_VERSION),
         # Release tags and titles use these (map-<slug>-<built_at>).
         "region_label": label,
         "region_slug": naming.slug(label),
-        # The device's automatic time zone (e39rpi-timezone).
+        # The device's automatic time zone (e39rpi-timezone) without a
+        # position; with one, timezone_area (zone_facts).
         "timezone": zone or "",
+        **zone_facts,
         "built_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "region": region.name,
         "center": f"{region.center_lat},{region.center_lon}",

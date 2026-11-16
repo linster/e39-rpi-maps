@@ -189,6 +189,25 @@ CREATE TABLE map_poi (
 );
 CREATE INDEX map_poi_location ON map_poi (latitude, longitude);
 CREATE INDEX map_poi_category ON map_poi (category);
+
+-- The time zones of the map's region (timezone-boundary-builder, clipped to
+-- the circle + a margin, simplified), for the zone at the car's position
+-- (mapdata.timezones). geometry: a GeoJSON Polygon or MultiPolygon, (lon,
+-- lat) as GeoJSON has it. The bounding box columns pre-filter lookups.
+-- Optional: maps built before it have no such table, and readers fall back to
+-- the fact timezone (the zone at the circle's centre). Facts: timezone_areas
+-- (rows), timezone_boundaries (the source release, e.g. "2026e").
+-- (No semicolons in comments here: some tests split this script on them.)
+CREATE TABLE timezone_area (
+    id       INTEGER PRIMARY KEY,
+    zone     TEXT NOT NULL,
+    min_lat  REAL NOT NULL,
+    min_lon  REAL NOT NULL,
+    max_lat  REAL NOT NULL,
+    max_lon  REAL NOT NULL,
+    geometry TEXT NOT NULL
+);
+CREATE INDEX timezone_area_bbox ON timezone_area (min_lat, max_lat, min_lon, max_lon);
 """
 
 OSM_TYPE_CODES = {"node": 1, "way": 2, "relation": 3}

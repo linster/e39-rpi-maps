@@ -1,3 +1,4 @@
+import json
 from django.contrib.auth.models import User
 from django.db import connections
 from django.test import SimpleTestCase, TestCase
@@ -41,3 +42,71 @@ class MapMetaTests(TestCase):
 
     def test_as_dict(self):
         self.assertEqual(MapMeta.as_dict(), {"region": "ontario", "schema_version": "1"})
+
+
+class ZoneLookupTests(SimpleTestCase):
+    """mapdata.timezones on a map database (plain sqlite3, as on the device)."""
+
+    @staticmethod
+    def square(min_lon, min_lat, max_lon, max_lat):
+        return [[min_lon, min_lat], [max_lon, min_lat], [max_lon, max_lat], [min_lon, max_lat], [min_lon, min_lat]]
+
+    def database(self, areas=True, centre_zone="America/Toronto"):
+        import sqlite3
+
+        from mapdata import schema
+
+        conn = sqlite3.connect(":memory:")
+        if areas:
+            schema.create(conn)
+        else:   # a map built before timezone_area
+            conn.execute("CREATE TABLE e39maps_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        if centre_zone:
+            conn.execute("INSERT INTO e39maps_meta VALUES ('timezone', ?)", (centre_zone,))
+        if areas:
+            sq = self.square
+            # Edmonton (west of -110) and Regina (east), Regina's area made of
+            # two polygons, Edmonton's with a hole (no zone in it).
+            rows = [
+                ("America/Edmonton", {"type": "Polygon", "coordinates": [sq(-120, 49, -110, 60), sq(-115, 53, -114, 54)]}),
+                ("America/Regina", {"type": "MultiPolygon", "coordinates": [[sq(-110, 49, -102, 55)], [sq(-110, 55, -102, 60)]]}),
+            ]
+            for zone, g in rows:
+                lons = [p[0] for poly in (g["coordinates"] if g["type"] == "MultiPolygon" else [g["coordinates"]]) for p in poly[0]]
+                lats = [p[1] for poly in (g["coordinates"] if g["type"] == "MultiPolygon" else [g["coordinates"]]) for p in poly[0]]
+                conn.execute("INSERT INTO timezone_area (zone, min_lat, min_lon, max_lat, max_lon, geometry) "
+                             "VALUES (?, ?, ?, ?, ?, ?)", (zone, min(lats), min(lons), max(lats), max(lons), json.dumps(g)))
+        return conn
+
+    def test_inside_each_zone(self):
+        from mapdata import timezones
+
+        conn = self.database()
+        self.assertEqual(timezones.zone_at(conn, 53.55, -113.49), ("America/Edmonton", timezones.SOURCE_BOUNDARIES))
+        self.assertEqual(timezones.zone_at(conn, 50.45, -104.61), ("America/Regina", timezones.SOURCE_BOUNDARIES))
+        # The second polygon of the MultiPolygon.
+        self.assertEqual(timezones.zone_at(conn, 58.0, -105.0), ("America/Regina", timezones.SOURCE_BOUNDARIES))
+
+    def test_in_a_hole_and_outside(self):
+        from mapdata import timezones
+
+        conn = self.database()
+        self.assertEqual(timezones.zone_at(conn, 53.5, -114.5), ("America/Toronto", timezones.SOURCE_MAP_CENTRE))
+        self.assertEqual(timezones.zone_at(conn, 45.0, -75.0), ("America/Toronto", timezones.SOURCE_MAP_CENTRE))
+
+    def test_shared_border_belongs_to_one_zone(self):
+        from mapdata import timezones
+
+        conn = self.database()
+        # Lloydminster sits on the -110 border: exactly one answer, the same each time.
+        answers = {timezones.area_zone_at(conn, lat, -110.0) for lat in (50.0, 53.28, 59.9)}
+        self.assertEqual(len(answers), 1)
+        self.assertIn(answers.pop(), ("America/Edmonton", "America/Regina"))
+
+    def test_map_without_areas_or_zone(self):
+        from mapdata import timezones
+
+        self.assertEqual(timezones.zone_at(self.database(areas=False), 53.55, -113.49),
+                         ("America/Toronto", timezones.SOURCE_MAP_CENTRE))
+        self.assertEqual(timezones.zone_at(self.database(areas=False, centre_zone=None), 53.55, -113.49),
+                         (None, None))
