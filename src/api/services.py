@@ -8,7 +8,7 @@ import grpc
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError, close_old_connections
 
-from e39maps_api.v1 import pois_pb2, pois_pb2_grpc, routes_pb2_grpc
+from e39maps_api.v1 import common_pb2, geocode_pb2, geocode_pb2_grpc, pois_pb2, pois_pb2_grpc, routes_pb2_grpc
 from mapdata.models import MapPoi
 from pois.models import Poi
 
@@ -176,3 +176,57 @@ class RouteService(routes_pb2_grpc.RouteServiceServicer):
             context.abort(grpc.StatusCode.NOT_FOUND, f"no route: {exc}")
         except RoutingUnavailable as exc:
             context.abort(grpc.StatusCode.UNAVAILABLE, f"routing unavailable: {exc}")
+
+
+GEOCODE_DEFAULT_LIMIT = 5
+GEOCODE_MAX_LIMIT = 50
+GEOCODE_PRECISIONS = {
+    "address": geocode_pb2.GEOCODE_PRECISION_ADDRESS,
+    "interpolated": geocode_pb2.GEOCODE_PRECISION_INTERPOLATED,
+    "street": geocode_pb2.GEOCODE_PRECISION_STREET,
+    "place": geocode_pb2.GEOCODE_PRECISION_PLACE,
+    "postcode": geocode_pb2.GEOCODE_PRECISION_POSTCODE,
+}
+
+
+def geocode_candidates(**query):
+    """mapdata.geocode on the map database. Raises GeocodingUnavailable (no
+    data in the map), DatabaseError / sqlite3.Error (no map database)."""
+    from django.db import connections
+
+    from mapdata import geocode
+
+    conn = connections["mapdata"]
+    conn.ensure_connection()
+    return geocode.geocode(conn.connection, **query)
+
+
+class GeocodeService(geocode_pb2_grpc.GeocodeServiceServicer):
+
+    @rpc
+    def Geocode(self, request, context):
+        import sqlite3
+
+        from mapdata.geocode import GeocodingUnavailable
+
+        a = request.address
+        if not (request.query.strip() or any((a.street, a.house_number, a.locality, a.postal_code))):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "give a query or an address")
+        if request.limit < 0:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "limit must not be negative")
+        near = (request.near.latitude, request.near.longitude) if request.HasField("near") else None
+        try:
+            found = geocode_candidates(
+                query=request.query.strip() or None, street=a.street or None, number=a.house_number or None,
+                locality=a.locality or None, region=a.region or None, postcode=a.postal_code or None, near=near,
+                limit=min(request.limit or GEOCODE_DEFAULT_LIMIT, GEOCODE_MAX_LIMIT))
+        except GeocodingUnavailable as exc:
+            context.abort(grpc.StatusCode.UNAVAILABLE, str(exc))
+        except (DatabaseError, sqlite3.Error) as exc:
+            context.abort(grpc.StatusCode.UNAVAILABLE, f"no map database: {exc}")
+        return geocode_pb2.GeocodeResponse(candidates=[
+            geocode_pb2.GeocodeCandidate(
+                label=c.label, location=common_pb2.LatLng(latitude=c.latitude, longitude=c.longitude),
+                precision=GEOCODE_PRECISIONS[c.precision], score=c.score, street=c.street,
+                house_number=c.number, locality=c.place, postal_code=c.postcode)
+            for c in found])

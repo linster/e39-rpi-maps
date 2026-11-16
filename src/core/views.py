@@ -53,3 +53,38 @@ def timezone(request):
     if zone is None:
         return JsonResponse({"error": "the map has no time zone"}, status=404)
     return JsonResponse({"zone": zone, "source": source})
+
+
+def geocode(request):
+    """Geocoding for a look over HTTP (the HMI uses gRPC's GeocodeService):
+    GET /geocode?q=123+Bank+St,+Ottawa[&near=45.42,-75.70][&limit=5] ->
+    {"candidates": [{"label", "lat", "lon", "precision", "score", ...}]}.
+    400 without q; 503 without a map database or geocoding data in it."""
+    from api.services import geocode_candidates
+    from mapdata.geocode import GeocodingUnavailable
+
+    query = request.GET.get("q", "").strip()
+    if not query:
+        return JsonResponse({"error": "q (the address) is required"}, status=400)
+    near = None
+    if request.GET.get("near"):
+        try:
+            lat, lon = (float(v) for v in request.GET["near"].split(","))
+            near = (lat, lon)
+        except ValueError:
+            return JsonResponse({"error": "near: lat,lon"}, status=400)
+    try:
+        limit = max(1, min(50, int(request.GET.get("limit", 5))))
+    except ValueError:
+        return JsonResponse({"error": "limit: a number"}, status=400)
+    try:
+        found = geocode_candidates(query=query, near=near, limit=limit)
+    except GeocodingUnavailable as exc:
+        return JsonResponse({"error": str(exc)}, status=503)
+    except (DatabaseError, sqlite3.Error) as exc:
+        return JsonResponse({"error": f"no map database: {exc}"}, status=503)
+    return JsonResponse({"candidates": [
+        {"label": c.label, "lat": round(c.latitude, 6), "lon": round(c.longitude, 6), "precision": c.precision,
+         "score": round(c.score, 1), "street": c.street, "number": c.number, "locality": c.place,
+         "postcode": c.postcode}
+        for c in found]})

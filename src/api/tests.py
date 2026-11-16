@@ -13,7 +13,8 @@ import grpc
 from django.test import TransactionTestCase, override_settings
 from google.protobuf.field_mask_pb2 import FieldMask
 
-from e39maps_api.v1 import common_pb2, pois_pb2, pois_pb2_grpc, routes_pb2, routes_pb2_grpc
+from e39maps_api.v1 import (common_pb2, geocode_pb2, geocode_pb2_grpc, pois_pb2, pois_pb2_grpc, routes_pb2,
+                            routes_pb2_grpc)
 from pois.models import Poi
 
 from .server import build_server
@@ -34,6 +35,7 @@ class GrpcTestCase(TransactionTestCase):
         self.channel = grpc.insecure_channel(f"127.0.0.1:{port}")
         self.pois = pois_pb2_grpc.PoiServiceStub(self.channel)
         self.routes = routes_pb2_grpc.RouteServiceStub(self.channel)
+        self.geocoder = geocode_pb2_grpc.GeocodeServiceStub(self.channel)
 
     def tearDown(self):
         self.channel.close()
@@ -355,6 +357,7 @@ class MapPoiSearchTests(GrpcTestCase):
         from mapdata import schema
 
         ddl = (schema.SCHEMA.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
+               .replace("CREATE VIRTUAL TABLE ", "CREATE VIRTUAL TABLE IF NOT EXISTS ")
                .replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS "))
         with connections["mapdata"].cursor() as c:
             for statement in filter(str.strip, ddl.split(";")):
@@ -429,3 +432,86 @@ class ValhallaVersionFreezeTests(unittest.TestCase):
             pins = [line.split("==")[1].strip() for line in (root / rel).read_text().splitlines()
                     if line.startswith("pyvalhalla==")]
             self.assertEqual(pins, [schema.VALHALLA_VERSION], rel)
+
+
+GEOCODE_TABLES = ("map_street_fts", "map_address", "map_street", "map_place", "map_postcode")
+
+
+def fill_geocoding(connection):
+    """A few geocoding rows in the (test) map database: Bank Street, Ottawa,
+    with 100 and 110 (even side) and a postal code; Ottawa as a place."""
+    from mapdata import schema
+
+    ddl = (schema.SCHEMA.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
+           .replace("CREATE VIRTUAL TABLE ", "CREATE VIRTUAL TABLE IF NOT EXISTS ")
+           .replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS "))
+    with connection.cursor() as c:
+        for statement in filter(str.strip, ddl.split(";")):
+            c.execute(statement)
+        c.execute("INSERT INTO map_place (name, norm, kind, latitude, longitude, population) "
+                  "VALUES ('Ottawa', 'ottawa', 'city', 45.4215, -75.6972, 1017449)")
+        c.execute("INSERT INTO map_street VALUES (1, 'Bank Street', 'bank st', 'Ottawa', 'ottawa', 45.401, -75.698, 2)")
+        c.execute("INSERT INTO map_street_fts (map_street_fts) VALUES ('rebuild')")
+        c.execute("INSERT INTO map_address VALUES (1, 100, '100', 45400000, -75698200, 'K1S3V8'), "
+                  "(1, 110, '110', 45405000, -75698200, 'K1S3V8')")
+        c.execute("INSERT INTO map_postcode VALUES ('K1S3V8', 45.4025, -75.6982, 2)")
+
+
+def drop_geocoding(connection):
+    with connection.cursor() as c:
+        for table in GEOCODE_TABLES:
+            c.execute(f"DROP TABLE IF EXISTS {table}")
+
+
+class GeocodeTests(GrpcTestCase):
+    """GeocodeService on a hand-made map database (mapdata.geocode has its
+    own tests on a built map: toolkit/tests/test_geocode.py)."""
+
+    databases = {"default", "mapdata"}
+
+    def setUp(self):
+        super().setUp()
+        from django.db import connections
+
+        drop_geocoding(connections["mapdata"])
+        fill_geocoding(connections["mapdata"])
+
+    def tearDown(self):
+        from django.db import connections
+
+        drop_geocoding(connections["mapdata"])
+        super().tearDown()
+
+    def geocode(self, **kwargs):
+        return self.geocoder.Geocode(geocode_pb2.GeocodeRequest(**kwargs)).candidates
+
+    def test_free_text(self):
+        best = self.geocode(query="110 Bank St, Ottawa")[0]
+        self.assertEqual(best.label, "110 Bank Street, Ottawa")
+        self.assertEqual(best.precision, geocode_pb2.GEOCODE_PRECISION_ADDRESS)
+        self.assertAlmostEqual(best.location.latitude, 45.405, places=6)
+        self.assertEqual((best.street, best.house_number, best.locality, best.postal_code),
+                         ("Bank Street", "110", "Ottawa", "K1S 3V8"))
+
+    def test_structured_address_and_interpolation(self):
+        address = geocode_pb2.StructuredAddress(street="Bank Street", house_number="104", locality="Ottawa",
+                                                region="ON", postal_code="K1S 3V8", country="Canada")
+        best = self.geocode(address=address, near=latlng(45.4, -75.7), limit=3)[0]
+        self.assertEqual(best.precision, geocode_pb2.GEOCODE_PRECISION_INTERPOLATED)
+        self.assertAlmostEqual(best.location.latitude, 45.402, places=5)
+
+    def test_postcode_and_no_match(self):
+        self.assertEqual(self.geocode(query="K1S 3V8")[0].precision, geocode_pb2.GEOCODE_PRECISION_POSTCODE)
+        self.assertEqual(list(self.geocode(query="1 Nowhere Lane")), [])
+
+    def test_bad_requests(self):
+        self.assertStatus(grpc.StatusCode.INVALID_ARGUMENT, self.geocoder.Geocode, geocode_pb2.GeocodeRequest())
+        self.assertStatus(grpc.StatusCode.INVALID_ARGUMENT, self.geocoder.Geocode,
+                          geocode_pb2.GeocodeRequest(query="x", limit=-1))
+
+    def test_map_without_geocoding_data(self):
+        from django.db import connections
+
+        drop_geocoding(connections["mapdata"])
+        self.assertStatus(grpc.StatusCode.UNAVAILABLE, self.geocoder.Geocode,
+                          geocode_pb2.GeocodeRequest(query="110 Bank St"))

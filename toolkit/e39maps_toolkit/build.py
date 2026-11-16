@@ -156,13 +156,14 @@ def write_timezone_areas(conn, region, boundaries, log=print):
 
 def build(region, categories, out_path, extract_paths, log=print, progress=None,
           cancelled=lambda: False, toolkit_version="", routing=None, raster_files=None, raster_info=None,
-          timezone_boundaries=None):
+          timezone_boundaries=None, geocoding=True):
     """Write the map database to out_path (replaced atomically). routing:
     (tiles tar, Valhalla version) to pair with it, or None; raster_files:
     rendered MBTiles files (raster_info: tiles_zooms, tiles_count);
     timezone_boundaries: the time zone boundaries (timezones.fetch_boundaries),
-    or None for a map without them. Returns the facts written to
-    e39maps_meta."""
+    or None for a map without them; geocoding: also extract addresses,
+    streets, places and postal codes (addresses.extract, another pass over
+    the extracts). Returns the facts written to e39maps_meta."""
     categories = [c for c in schema.CATEGORIES if c in set(categories)]
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -239,6 +240,17 @@ def build(region, categories, out_path, extract_paths, log=print, progress=None,
     zone = timezones.zone_at(region.center_lat, region.center_lon)
     log(f"Time zone at the centre: {zone or 'unknown'}")
     zone_facts = write_timezone_areas(conn, region, timezone_boundaries, log) if timezone_boundaries else {}
+    geocode_facts = {}
+    if geocoding:
+        from . import addresses   # imports build (area_point)
+
+        try:
+            geocode_facts = addresses.extract(conn, region, [Path(p) for p in extract_paths], log=log,
+                                              cancelled=cancelled)
+        except InterruptedError:
+            conn.close()
+            tmp.unlink(missing_ok=True)
+            raise
     meta = {
         "schema_version": str(schema.SCHEMA_VERSION),
         # Release tags and titles use these (map-<slug>-<built_at>).
@@ -248,6 +260,7 @@ def build(region, categories, out_path, extract_paths, log=print, progress=None,
         # position; with one, timezone_area (zone_facts).
         "timezone": zone or "",
         **zone_facts,
+        **geocode_facts,
         "built_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "region": region.name,
         "center": f"{region.center_lat},{region.center_lon}",
