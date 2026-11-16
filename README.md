@@ -1,16 +1,26 @@
 # e39-rpi-maps
 
-Django + GeoDjango project to give routing and POIs a backend. Targets a
-Raspberry Pi running Yocto Linux.
+The maps backend of the [e39-rpi](https://github.com/linster/e39-rpi) HMI
+(the BMW E39's screen on a Raspberry Pi running Yocto Linux), and the
+**map toolkit** that builds its maps on a laptop. Everything works
+offline in the car:
 
-Current state: hello-world Django app with a styled page, a `/healthz`
-endpoint, and a production-shaped settings file (env-driven config, SQLite
-tuned for concurrent readers, WhiteNoise for static files), on **Django
-5.0.11** (the Yocto image's version) with **two databases**: read-only map
-data and writable state (see "Databases").
+- **POIs**: the user's own (editable) and the map's (fuel stations,
+  restaurants, parks, ... from OpenStreetMap), searched near a point, in an
+  area or by name.
+- **Routing**: turn-by-turn routes from Valhalla, in-process, on the map's
+  routing tiles.
+- **Map tiles**: pre-rendered offline tiles in OSM's style, a cache, and
+  tile.openstreetmap.org when online.
+- **Geocoding**: addresses (free text or a contact's card) to positions.
+- **Time zones**: the zone at a position, so the car's clock follows it
+  across zone borders.
 
-The HMI will talk to this backend over **gRPC** for POIs and routes (routing:
-**Valhalla** through its Python bindings); map tiles stay plain HTTP.
+The HMI talks to it over **gRPC** (POIs, routes, geocoding) and **HTTP**
+(tiles). It's a Django **5.0.11** app (the Yocto image's version) with
+**two SQLite databases**: the read-only map, replaced as a whole on a map
+update, and the writable state (users, the user's POIs). See "Databases".
+Packaged for the car by e39-rpi-yocto's `meta-e39rpi-maps` layer.
 
 ## Quick start
 
@@ -52,7 +62,8 @@ device. It isn't part of the app installed on the device.
 
 ```sh
 toolkit/map-toolkit-container.sh          # the window, in a container (podman or docker)
-toolkit/map-toolkit-container.sh --help   # the same as commands: build, info, push, update-image
+toolkit/map-toolkit-container.sh --help   # the same as commands: build, info, push, usb, update-image,
+                                          #   publish, releases, pin, fetch, render-*
 toolkit/map-toolkit.sh                    # or without a container: creates toolkit/.venv
 ```
 
@@ -71,6 +82,8 @@ file in a shared directory). Inside the container the routing tiles are
 copied beside the database rather than hard-linked from the cache
 (different mounts), so they take 625 MB more disk.
 
+![The map toolkit, tab 1: the region (a circle on the map), the extracts that cover it, POI categories and offline map tiles](docs/images/toolkit-region.png)
+
 - **Region** (tab 1): an OpenStreetMap map with the circle on it: click to
   move the centre, the slider or box for the radius, "Find" for a place
   name (Nominatim). Next to it, a checklist of Geofabrik's extracts the
@@ -84,8 +97,12 @@ copied beside the database rather than hard-linked from the cache
 - **Build map database**: downloads the OpenStreetMap extracts of the region
   from Geofabrik (cached in `~/.cache/e39maps-toolkit/extracts`, refreshed
   when Geofabrik has newer ones, MD5-checked), keeps the POIs of the chosen
-  categories inside the region's circle and writes
-  `output/db/e39maps-osm.sqlite`. Default region: centred on Ottawa, 530 km,
+  categories inside the region's circle, adds the region's time zone
+  boundaries and its addresses for geocoding (a second pass over the
+  extracts; see [Geocoding](#geocoding)), and writes
+  `output/db/e39maps-osm.sqlite`. Ottawa + 530 km takes about 11 minutes
+  and 7 GB of memory with cached extracts and routing tiles; the database
+  is 140 MB. Default region: centred on Ottawa, 530 km,
   reaching London ON and Quebec City; Canada only (the Ontario and Quebec
   extracts, ~2.2 GB). Categories: fuel stations, restaurants (incl. fast
   food), ski hills, museums, airports, parks, trailheads, car parts stores,
@@ -118,11 +135,13 @@ copied beside the database rather than hard-linked from the cache
   resumable). Default plan: the circle at zooms 6-13 plus zooms 14-16 within
   8 km of cities and 3 km of towns (OSM place=city/town), configurable,
   with extra areas and a live tile/size estimate (Ottawa + 530 km: 264,537
-  tiles, ~4 GB). The next "Build map database" includes them: the files
+  tiles in two files, 2.3 GB). The next "Build map database" includes them: the files
   are companions of the database like the routing tiles (names, sizes,
   SHA-256 in its facts) and travel with it everywhere (live swap, USB,
   image, releases). The backend serves them first (`/tiles/...`, source
   `mbtiles`).
+![The map toolkit, tab 2: the map database, live swap, the image, and published maps](docs/images/toolkit-build-and-deliver.png)
+
 - **Live swap** (QEMU on `localhost:2222`, or a device's host/IP): copies
   the database over ssh next to the installed one, then the device's
   installer (`e39maps-mapdb`, Yocto layer) checks it, stops the services
@@ -141,8 +160,9 @@ copied beside the database rather than hard-linked from the cache
   images ship (see [Pinning](#pinning-which-map-images-ship)).
   Downloads are checked against the release's `map-release.json` (SHA-256)
   and kept in `~/.cache/e39maps-toolkit/published/<tag>`.
-- **USB stick** (no laptop needed): put the database and its routing
-  tiles in a folder `RPIMAPS` on a stick and plug it into the device;
+- **USB stick** (no laptop needed): put the database and its companion
+  files (routing tiles, map tiles) in a folder `RPIMAPS` on a stick
+  ("Copy to USB stick..." does that) and plug it into the device;
   they're checked and installed, then renamed on the stick to
   `<name>.copied-<date-time>` (invalid files: `.rejected-...`; older ones
   next to a newer: `.skipped-...`).
@@ -171,7 +191,7 @@ them (e39-rpi-yocto's `e39maps-timezone-follow`, from gpsd):
   Building reads all of it (172 MB of GeoJSON, ~1.5 GB of memory, ~30 s).
 - Clipped to the circle + 20 km and simplified to ~100 m with
   `shapely.coverage_simplify`, which keeps shared borders identical (no gaps
-  or overlaps between zones). Ottawa + 530 km: 4 zones, ~86 kB.
+  or overlaps between zones). Ottawa + 530 km: 4 zones, 79 kB.
 - Facts: `timezone_areas` (rows) and `timezone_boundaries` (the release).
 - Looked up by `mapdata.timezones.zone_at` (pure Python, no shapely: the
   device imports it): bounding boxes in SQL, then ray casting with holes. A
@@ -180,8 +200,10 @@ them (e39-rpi-yocto's `e39maps-timezone-follow`, from gpsd):
   The backend serves it as `GET /timezone?lat=..&lon=..` →
   `{"zone": ..., "source": "boundaries" | "map-centre"}`.
 Toolkit tests: `PYTHONPATH=toolkit:src toolkit/.venv/bin/python -m unittest
-discover -s toolkit/tests` (needs pyosmium and pyvalhalla: the venv or the
-container's Python).
+discover -s toolkit/tests` (needs `toolkit/requirements.txt`: pyosmium,
+pyvalhalla, shapely, timezonefinder; the venv or the container's Python).
+Backend tests: `cd src && python manage.py test` (with
+`src/requirements/dev.txt`).
 
 ## Map tiles (HTTP, for the HMI)
 
@@ -216,8 +238,8 @@ backend. From, in order (`src/tiles/sources.py`; the source is in the
 
 ## gRPC API (for the HMI)
 
-The HMI talks to this backend over gRPC for POIs and routes (map tiles will
-be plain HTTP). The contract is in [`proto/e39maps_api/v1/`](proto/e39maps_api/v1/);
+The HMI talks to this backend over gRPC for POIs, routes and geocoding (map
+tiles are plain HTTP, above). The contract is in [`proto/e39maps_api/v1/`](proto/e39maps_api/v1/);
 this repository owns it, and the HMI (e39-rpi) generates its Kotlin client
 from a copy (`java_package ca.stefanm.e39maps.v1`).
 
@@ -306,8 +328,11 @@ src/
 ├── manage.py
 ├── e39maps/        project package (settings, URLs, WSGI/ASGI entry points,
 │                   database router, SQLite connection setup)
-├── core/           hello-world app (view, template, static CSS, tests)
-├── mapdata/        models of the read-only map database (unmanaged)
+├── core/           the index page, /healthz, /timezone, /geocode
+├── mapdata/        the map database: its format (schema.py, shared with the
+│                   toolkit and the device's installer), unmanaged models,
+│                   releases (release.py), time zones and geocoding (pure
+│                   Python, also used on the device)
 ├── pois/           the user's POIs (state database, admin)
 ├── api/            gRPC services + `run_grpc_server` command
 ├── tiles/          map tiles over HTTP (MBTiles, cache, upstream)
@@ -316,17 +341,16 @@ src/
 │                   dev.txt (+ grpcio-tools)
 └── .env.example    configuration reference
 proto/              the gRPC contract (.proto)
-scripts/            gen-proto.sh
-toolkit/            the map toolkit (laptop only): build and push map databases
-output/db/          the local map (database + routing tiles; not committed) + ODbL attribution
+scripts/            gen-proto.sh, fetch-map.py (the pinned map, for builds)
+toolkit/            the map toolkit (laptop only): build, render, publish and push maps
+docs/images/        screenshots for this README
+output/db/          the local map (database, routing and map tiles; not committed) + ODbL attribution
 map-release.json    pins the published map image builds ship (RELEASE_PROCESS.md)
 ```
 
 The split matters for the Yocto build: the recipe installs `src/` as the
 application and ships `output/db/` as a separate `e39maps-data` package, so a
 large database does not rebuild the code (and vice versa).
-
-Future apps (`maps`, `routing`) slot in next to `core`.
 
 Maps aren't committed. A map worth keeping is **published as a GitHub
 release** of this repository: `map-<city>-<built_at>`, named after the
@@ -430,163 +454,68 @@ and each one costs tens of MB of RSS. Tune only after measuring on the target.
 
 ---
 
-## Packaging plan for the Raspberry Pi / Yocto
+## Packaging for the Raspberry Pi / Yocto
 
-> The concrete recipe contract (submodule layout, unit files, dependency
-> names, database provisioning, acceptance checks) lives in
-> [`Yocto_instructions.md`](Yocto_instructions.md).
+e39-rpi-yocto's **`meta-e39rpi-maps`** layer packages this repository; its
+README describes the services, paths and what was tested on the device. The
+recipe contract (submodule layout, unit files, dependencies, acceptance
+checks) is in [`Yocto_instructions.md`](Yocto_instructions.md). The guiding
+constraint: the Pi has little RAM (1-2 GB), slow storage (an SD card) and a
+modest CPU, so the expensive work happens on the laptop and the device only
+reads.
 
-The guiding constraint is that the Pi has little RAM (512 MB–2 GB), slow
-storage (SD card), and limited CPU. Everything below is chosen to avoid
-running heavy services and to avoid doing expensive work on the device.
-
-### 1. How the recipe gets the code
-
-This repository is a **git submodule of `e39-rpi-yocto`**, and the recipe
-builds it with `externalsrc` — the same pattern `e39rpi-hmi.bb` uses for the
-`e39-rpi` HMI. Add it at the top of the Yocto repo:
-
-```sh
-cd ~/e39-rpi-yocto
-git submodule add https://github.com/linster/e39-rpi-maps.git e39-rpi-maps
-```
-
-Then set `E39_MAPS_SRC_DEFAULT` in the maps layer's `layer.conf` to
-`<yocto-root>/e39-rpi-maps`. The parent repo's commit pins the submodule
-commit, so the image is reproducible; `externalsrc` also picks up uncommitted
-edits, which is intended for development only. `devtool modify e39maps` works
-for local iteration.
-
-The project does not need to become a PyPI package. The recipe copies
-`src/{manage.py,e39maps,core}` to `${datadir}/e39rpi-maps` and depends on
-OE-provided Python packages. If we later want an installable wheel, add a
-`pyproject.toml` and use the PEP 517 / `python_setuptools_build_meta` classes.
-
-### 2. Python dependencies: use OE recipes, not pip
-
-Do not create a virtualenv or run `pip` on the target. Options, in order of
-preference:
-
-1. **OE packages** (`meta-python`): `python3-django`, `python3-gunicorn`,
-   `python3-whitenoise` (if present). Zero extra build cost, but versions lag
-   upstream. The app is pinned to the image's versions (Django 5.0.11,
-   asgiref 3.8.1, sqlparse 0.4.4, WhiteNoise 6.6.0, gunicorn 21.2.0 in
-   scarthgap's meta-python; `src/requirements/`), so no extra recipes.
-2. **Custom recipes** for anything missing, using `python_pep517` /
-   `setuptools3` and the upstream sdist. Cross-compiled wheels are the
-   exception, not the rule; pure-Python packages build in seconds.
-3. **`pip bundle`/vendored wheels**: last resort. It bypasses OE's dependency
-   tracking and licensing metadata.
-
-`RDEPENDS:${PN}` should list the runtime packages explicitly so the image
-size and license manifest stay accurate.
-
-### 3. Static files and the web server
-
-- Run `collectstatic` on first boot into `/var/lib/e39maps/static` (the init
-  systemd unit). The image's `meta-python` has no native WhiteNoise, so
-  build-time collection would need extra native recipes; first boot costs a
-  few seconds once. Hashed filenames are generated then.
-- Serve static files with **WhiteNoise from the gunicorn process**. That
-  avoids nginx: one less process, roughly 5–15 MB of RAM saved, and no
-  separate config to maintain. If we later need TLS or caching, put a small
-  reverse proxy in front, but don't add it by default.
-- The `e39-rpi` image's rootfs is writable ext4 and grows to fill the SD card
-  on first boot, but state still belongs in `/var/lib/e39maps` (a `systemd`
-  `StateDirectory`), not next to the code, so package upgrades and dataset
-  updates don't touch it.
-
-### 4. Database and OSM data
-
-This is the biggest memory/space decision and should be made before importing
-data:
-
-| Option | RAM / disk | Fit for the Pi |
-| --- | --- | --- |
-| **SQLite + SpatiaLite** | Low; single file | Best for read-mostly OSM data. GeoDjango supports it (`django.contrib.gis.db.backends.spatialite`). Needs `libspatialite`, GEOS, PROJ, GDAL in the image. |
-| **PostgreSQL + PostGIS** | High (server + shared buffers, typically 150–300 MB RSS) | Better concurrency and query features, but a lot of a 1 GB Pi before Django/gRPC even start. |
-
-Recommendation: **SpatiaLite for the on-device dataset**, and only move to
-PostGIS if we hit a feature that truly needs it.
-
-Do the expensive work off-device:
-
-- Import a **regional OSM extract** (Geofabrik `.osm.pbf`), not the planet.
-- Build the map database on the laptop (the map toolkit, still to come),
-  then ship it as a **separate `e39maps-data` package**: the SQLite file,
-  installed read-only in `/usr/share/e39rpi-maps/data/` and opened there in
-  place (no copy, no decompression on the device). Importing on a Pi is slow
-  and can exhaust RAM.
-- Build the artifact with the image's library versions (`libspatialite` 5.0.1,
-  GEOS 3.12.1, PROJ 9.3.1) — a SpatiaLite file from a newer library may not
-  open on the device.
-- OSM-derived data is **ODbL-1.0**, not MPL-2.0; ship the attribution notice
-  with the artifact.
-- The map database is read-only and opened `immutable=1`; the writable
-  state (users, admin, user POIs) is a second database in `/var/lib`, so map
-  updates keep user content (see "Databases").
-- Published maps are GitHub release assets (no quota; each file under 2
-  GiB), pinned by `map-release.json`; build machines fetch the pinned one
-  with `scripts/fetch-map.py` (e39-rpi-yocto: `scripts/fetch-map.sh`). Git
-  LFS was considered and dropped: 10 GiB of free storage and monthly
-  bandwidth would last about 15 map versions or clones.
-
-### 5. gRPC
-
-- `grpcio` 1.62.2 and `protobuf` 4.25.3 come from scarthgap's meta-python
-  (`python3-grpcio`, a large C++ build on the x86 build host);
-  `src/requirements/base.txt` pins the same.
-- The gRPC server is a **separate systemd service** from the WSGI app
-  (`manage.py run_grpc_server`, port 50051). That isolates crashes and gives
-  each service its own memory limit.
-- Long-lived streams pin threads/connections. Prefer a small number of
-  streams and a bounded queue; don't size the server for "many clients".
-
-### 6. Runtime shape on the image
-
-```ini
-# /usr/lib/systemd/system/e39maps.service (sketch)
-[Service]
-User=e39maps
-StateDirectory=e39maps
-Environment=DJANGO_DEBUG=0
-Environment=DJANGO_STATE_DB_PATH=/var/lib/e39maps/state.sqlite3
-Environment=DJANGO_MAP_DB_PATH=/usr/share/e39rpi-maps/data/e39maps-osm.sqlite
-Environment=DJANGO_STATIC_ROOT=/var/lib/e39maps/static
-Environment=DJANGO_SECRET_KEY_FILE=/var/lib/e39maps/secret_key
-WorkingDirectory=/usr/share/e39rpi-maps
-ExecStart=/usr/bin/gunicorn e39maps.wsgi:application \
-  --bind 0.0.0.0:8080 --workers 1 --threads 2 \
-  --max-requests 1000 --max-requests-jitter 100
-MemoryMax=192M
-Restart=on-failure
-```
-
-- Log to stdout/stderr and let journald handle rotation; no log files on the
-  SD card.
-- Set `MemoryMax=` (and optionally `CPUQuota=`) per service so a runaway
-  import or stream can't take down the device.
-- Run `python manage.py check --deploy` at build time to catch misconfiguration.
-- Ship migrations in the package and run `manage.py migrate` from a systemd
-  `ExecStartPre` (or an init-time oneshot) against the persistent DB.
-
-### 7. Rough memory budget (idle, 1 GB Pi)
-
-| Component | RSS |
-| --- | --- |
-| gunicorn + Django (1 worker) | ~50–70 MB |
-| gRPC service (separate process) | ~40–60 MB |
-| SQLite/SpatiaLite page cache | tunable, keep small (~16–32 MB) |
-| systemd + base Yocto image | ~100–150 MB |
-
-That leaves plenty of headroom on 1 GB and is tight but workable on a 512 MB
-Pi Zero 2 W. PostGIS would consume most of the remaining budget, which is why
-it's not the default.
+- **The code:** this repository is a git submodule of e39-rpi-yocto, built
+  with `externalsrc` (like the HMI from e39-rpi). The `e39maps` recipe copies
+  `src/manage.py` and every top-level package in `src/` (so a new app needs
+  no recipe change) to `/usr/share/e39rpi-maps/app`, byte-compiled, read-only.
+- **The map:** a separate package, `e39maps-data`: the pinned published map
+  (`map-release.json`, fetched by e39-rpi-yocto's `scripts/fetch-map.sh`), in
+  `/usr/share/e39rpi-maps/data/`, opened in place. Live swap, USB sticks and
+  new images replace it as a whole; the state database in `/var/lib/e39maps`
+  keeps user content.
+- **Python dependencies** are OE recipes from scarthgap's meta-python, never
+  pip on the device. The app is pinned to their versions
+  (`src/requirements/`: Django 5.0.11, grpcio 1.62.2, protobuf 4.25.3,
+  WhiteNoise 6.6.0, gunicorn 21.2.0), plus our `python3-valhalla` recipe at
+  the frozen Valhalla version (`mapdata.schema.VALHALLA_VERSION`, checked by
+  the recipe).
+- **The database engine** is plain SQLite (3.45 in the image, with FTS5).
+  An earlier plan considered GeoDjango with SpatiaLite or PostGIS; neither
+  was needed. Positions are plain columns with indexes, areas are bounding
+  boxes plus pure-Python point-in-polygon tests (time zones), and street
+  names use FTS5 (geocoding). No GIS libraries on the device, and the
+  toolkit can build maps with any SQLite.
+- **Services** (systemd, user `e39maps`, hardened): `e39maps-init`
+  (migrate and collectstatic when the app changes), `e39maps` (gunicorn,
+  1 worker / 2 threads, WhiteNoise for static files, port 8080),
+  `e39maps-grpc` (port 50051, its own process so a crash or hang can't take
+  the web app down), a timer pruning the tile cache, and
+  `e39maps-timezone-follow` (root; gpsd → the zone at the car's position).
+  Logs go to the journal.
+- **Memory**, measured in qemuarm64: gunicorn + Django ~45 MB
+  (`MemoryMax=192M`), the gRPC server ~52 MB (`MemoryMax=128M`), the
+  time-zone follower ~13 MB.
+- **OSM data is ODbL-1.0**, not MPL-2.0: `ATTRIBUTION.txt` travels with every
+  map.
+- **Maps are published as GitHub releases** (each file under 2 GiB), not Git
+  LFS: 10 GiB of free LFS storage and bandwidth would last about 15 map
+  versions or clones.
 
 ### Roadmap
 
-1. Hello world page and health endpoint. ✅
-2. Add GeoDjango + SpatiaLite, a `places` model, admin registration.
-3. Import a regional OSM extract on the build host.
-4. gRPC service: user POIs (CRUD, search) ✅; map POIs ✅; routes (Valhalla) ✅.
-5. Test the BitBake recipe + systemd units on the Pi.
+Done:
+1. POIs over gRPC: the user's (CRUD, search) and the map's.
+2. Routes: Valhalla in-process.
+3. Map tiles: offline MBTiles, cache, upstream.
+4. The map toolkit: regions, extracts, routing tiles, offline tiles; live
+   swap, USB, image, releases and pinning.
+5. Packaging in e39-rpi-yocto, tested in qemuarm64.
+6. Time zones: per region, and following the car ([#2](https://github.com/linster/e39-rpi-maps/issues/2)).
+7. Geocoding ([#4](https://github.com/linster/e39-rpi-maps/issues/4)).
+
+Next:
+1. The HMI's side of geocoding: "Navigate" to a contact's address
+   ([linster/e39-rpi#59](https://github.com/linster/e39-rpi/issues/59)).
+2. Publish a map with geocoding data.
+3. Reverse geocoding (position → address).
+4. Test it all on a Pi in the car.
