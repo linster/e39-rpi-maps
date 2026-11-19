@@ -9,11 +9,14 @@ For more information on this file, see
 https://docs.djangoproject.com/en/5.2/topics/settings/
 """
 
+import glob
 import os
 from pathlib import Path
 from urllib.parse import quote
 
 from django.core.exceptions import ImproperlyConfigured
+
+from mapdata import schema
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -159,8 +162,13 @@ GRPC_MAX_WORKERS = int(os.environ.get("DJANGO_GRPC_MAX_WORKERS", "4"))
 # Routing (api/routing.py, Valhalla): the routing tiles the map toolkit
 # builds with the map database, and Valhalla's tile cache in MB (the tiles
 # are memory-mapped; the cache holds decoded tiles).
-ROUTING_TILES_PATH = Path(os.environ.get(
-    "DJANGO_ROUTING_TILES_PATH", MAP_DB_PATH.parent / "e39maps-routing.tar"))
+# Default: beside the map database, under its installed name (the device,
+# mapdata.schema.ROUTING_DEVICE_NAME) or else under the name the toolkit
+# writes (output/db: e39maps-osm.routing.tar for e39maps-osm.sqlite).
+_routing_default = MAP_DB_PATH.parent / schema.ROUTING_DEVICE_NAME
+if not _routing_default.exists():
+    _routing_default = MAP_DB_PATH.parent / schema.routing_name_for(MAP_DB_PATH.name)
+ROUTING_TILES_PATH = Path(os.environ.get("DJANGO_ROUTING_TILES_PATH", _routing_default))
 ROUTING_CACHE_MB = int(os.environ.get("DJANGO_ROUTING_CACHE_MB", "64"))
 
 # Map tiles (tiles/, /tiles/<z>/<x>/<y>.png): a pre-rendered MBTiles file
@@ -169,8 +177,12 @@ ROUTING_CACHE_MB = int(os.environ.get("DJANGO_ROUTING_CACHE_MB", "64"))
 # policy asks for at most 2 connections and caching for at least 7 days.
 # A glob: the offline tiles come in several files (each under 2 GiB, the
 # size limit of a GitHub release asset).
-TILES_MBTILES_PATH = os.environ.get(
-    "DJANGO_TILES_MBTILES_PATH", str(MAP_DB_PATH.parent / "e39maps-tiles-*.mbtiles"))
+# Default, like the routing tiles: the installed names (e39maps-tiles-01...)
+# or else the toolkit's (e39maps-osm.tiles-01... for e39maps-osm.sqlite).
+_tiles_default = str(MAP_DB_PATH.parent / schema.TILES_DEVICE_PATTERN.replace("{:02d}", "*"))
+if not glob.glob(_tiles_default):
+    _tiles_default = str(MAP_DB_PATH.parent / schema.tiles_name_for(MAP_DB_PATH.name, 0).replace("-00.", "-*."))
+TILES_MBTILES_PATH = os.environ.get("DJANGO_TILES_MBTILES_PATH", _tiles_default)
 TILE_CACHE_DIR = Path(os.environ.get("DJANGO_TILE_CACHE_DIR", BASE_DIR.parent / "output" / "tile-cache"))
 TILE_UPSTREAM_URL = os.environ.get("DJANGO_TILE_UPSTREAM_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
 TILE_UPSTREAM_CONNECTIONS = int(os.environ.get("DJANGO_TILE_UPSTREAM_CONNECTIONS", "2"))

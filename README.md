@@ -34,6 +34,11 @@ python manage.py migrate
 python manage.py runserver
 ```
 
+Or all in one: `scripts/run-backend.sh` sets up `.venv`, reads `.env`,
+migrates and runs the HTTP and gRPC servers together (`--help`). With the
+QEMU image running, port 50051 is taken by its forward:
+`DJANGO_GRPC_BIND=127.0.0.1:50061 scripts/run-backend.sh`.
+
 - Page: <http://127.0.0.1:8000/>
 - Health probe: <http://127.0.0.1:8000/healthz>
 - Admin: <http://127.0.0.1:8000/admin/>, user **`admin`**, password
@@ -214,8 +219,9 @@ backend. From, in order (`src/tiles/sources.py`; the source is in the
 
 1. **`mbtiles`**: the map's offline tiles, pre-rendered in OSM's style by the
    toolkit (`DJANGO_TILES_MBTILES_PATH`, a glob, default
-   `e39maps-tiles-*.mbtiles` beside the map database; several files, each
-   under 2 GiB).
+   `e39maps-tiles-*.mbtiles` beside the map database, the installed names,
+   else the toolkit's `e39maps-osm.tiles-*.mbtiles` as in `output/db`;
+   several files, each under 2 GiB).
 2. **`cache`**: the on-device cache (`DJANGO_TILE_CACHE_DIR`; on the device
    `/var/lib/e39maps/tiles`), tiles fetched earlier, so any tile seen once
    also works offline.
@@ -400,7 +406,7 @@ important ones:
 | `DJANGO_DEV_ADMIN` | `admin:e39rpi` with `DEBUG`, else unset | `user:password` of a superuser `migrate` creates if missing; empty = none. |
 | `DJANGO_GRPC_BIND` | `0.0.0.0:50051` | Where `run_grpc_server` listens. |
 | `DJANGO_GRPC_MAX_WORKERS` | `4` | gRPC server threads (concurrent calls). |
-| `DJANGO_ROUTING_TILES_PATH` | `e39maps-routing.tar` beside the map database | Valhalla's routing tiles. |
+| `DJANGO_ROUTING_TILES_PATH` | `e39maps-routing.tar` beside the map database (installed name), else the toolkit's `e39maps-osm.routing.tar` (as in `output/db`) | Valhalla's routing tiles. |
 | `DJANGO_ROUTING_CACHE_MB` | `64` | Valhalla's cache of decoded tiles. |
 | `DJANGO_TILE_CACHE_DIR` | `output/tile-cache` | Map tile cache (`/tiles/...`). |
 | `DJANGO_TILE_CACHE_MAX_MB` | `1024` | Tile cache limit (`prune_tile_cache`). |
